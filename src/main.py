@@ -176,8 +176,15 @@ async def lifespan(app: FastAPI):
             print("Browser captcha resident warmup skipped: no tab warmed successfully")
         else:
             # 没有任何可用 token 时，打开登录窗口供用户手动操作
-            await browser_service.open_login_window()
-            print("No active token found, opened login window for manual setup")
+            try:
+                await browser_service.open_login_window()
+            except Exception as exc:
+                print(
+                    "No active token found; login window setup failed, "
+                    f"continuing without an active token ({type(exc).__name__})"
+                )
+            else:
+                print("No active token found, opened login window for manual setup")
     elif captcha_config.captcha_method == "browser":
         from .services.browser_captcha import BrowserCaptchaService
 
