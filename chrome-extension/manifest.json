@@ -1,0 +1,17 @@
+{
+  "manifest_version": 3,
+  "name": "Flow2API reCAPTCHA Helper",
+  "version": "1.1.0",
+  "minimum_chrome_version": "120",
+  "description": "Browser solver pool for Flow2API; adapted from upstream PR #102.",
+  "permissions": ["storage", "tabs", "scripting", "alarms", "proxy"],
+  "optional_permissions": ["webRequest", "webRequestAuthProvider"],
+  "host_permissions": ["https://flow.google.com/*", "https://labs.google/*"],
+  "optional_host_permissions": ["<all_urls>"],
+  "background": {"service_worker": "background.js"},
+  "action": {"default_popup": "popup.html", "default_title": "Flow2API Helper"},
+  "content_scripts": [{
+    "matches": ["https://flow.google.com/*", "https://labs.google/*"],
+    "js": ["content.js"], "run_at": "document_idle"
+  }]
+}

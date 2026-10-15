@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <title>Flow2API Helper</title>
+  <style>
+    :root{color-scheme:dark;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;background:#101722;color:#e7edf4}
+    *{box-sizing:border-box}body{margin:0;width:360px;padding:16px;font-size:13px}h1{font-size:16px;margin:0}header{display:flex;justify-content:space-between;align-items:center;margin-bottom:16px}label{display:block;margin:12px 0 5px;color:#b8c6d7}input,select,button{font:inherit;border-radius:4px}input,select{width:100%;min-width:0;background:#1d2838;color:inherit;border:1px solid #526176;padding:7px}button{padding:8px 12px;background:#14684e;border:1px solid #258768;color:#fff;cursor:pointer}button:disabled{opacity:.5;cursor:wait}button.secondary{background:#29384d;border-color:#526176}.row{display:flex;gap:8px}.row>*{flex:1;min-width:0}.actions{margin-top:16px;display:flex;gap:8px}output{display:block;white-space:pre-wrap;overflow-wrap:anywhere;margin-top:12px;color:#f8c685}#logs{max-height:120px;overflow:auto;margin-top:12px;font-size:11px;color:#b8c6d7}.stats{margin:12px 0;color:#8cddbb}details{border-top:1px solid #526176;margin-top:14px;padding-top:12px}summary{cursor:pointer}
+  </style>
+</head>
+<body>
+  <header><h1>Flow2API Helper</h1><span id="status">离线</span></header>
+  <label for="wsUrl">WebSocket 地址</label><input id="wsUrl" type="url" placeholder="wss://flow2api.filifili.com/ws/captcha">
+  <label for="authKey">打码连接密钥</label><input id="authKey" type="password" autocomplete="off">
+  <label for="clientName">客户端名称</label><input id="clientName" maxlength="80">
+  <details><summary>浏览器配置代理</summary>
+    <label for="proxyScheme">代理类型</label><select id="proxyScheme"><option value="">关闭</option><option value="http">HTTP</option><option value="socks5">SOCKS5（无认证）</option></select>
+    <div class="row"><div><label for="proxyHost">地址</label><input id="proxyHost"></div><div><label for="proxyPort">端口</label><input id="proxyPort" type="number" min="1" max="65535"></div></div>
+    <label for="proxyUser">用户名</label><input id="proxyUser" autocomplete="off">
+    <label for="proxyPass">密码</label><input id="proxyPass" type="password" autocomplete="off">
+  </details>
+  <div class="stats" id="stats"></div>
+  <div class="actions"><button id="save" class="secondary">保存</button><button id="connect">连接</button><button id="disconnect" class="secondary">断开</button></div>
+  <output id="message" role="status"></output><div id="logs"></div>
+  <script src="popup.js"></script>
+</body>
+</html>

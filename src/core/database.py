@@ -372,6 +372,16 @@ class Database:
                 ),
             )
 
+            initial_extension = (config_dict or {}).get("captcha", {})
+            await db.execute(
+                "UPDATE captcha_config SET extension_auth_key = ?, extension_refresh_interval = ?, extension_max_consecutive_errors = ? WHERE id = 1",
+                (
+                    initial_extension.get("extension_auth_key", ""),
+                    initial_extension.get("extension_refresh_interval", 2),
+                    initial_extension.get("extension_max_consecutive_errors", 5),
+                ),
+            )
+
         # Ensure plugin_config has a row
         cursor = await db.execute("SELECT COUNT(*) FROM plugin_config")
         count = await cursor.fetchone()
@@ -455,6 +465,9 @@ class Database:
                 await db.execute("""
                     CREATE TABLE captcha_config (
                         id INTEGER PRIMARY KEY DEFAULT 1,
+                        extension_auth_key TEXT DEFAULT '',
+                        extension_refresh_interval INTEGER DEFAULT 2,
+                        extension_max_consecutive_errors INTEGER DEFAULT 5,
                         captcha_method TEXT DEFAULT 'yescaptcha',
                         yescaptcha_api_key TEXT DEFAULT '',
                         yescaptcha_base_url TEXT DEFAULT 'https://api.yescaptcha.com',
@@ -604,6 +617,9 @@ class Database:
             # Check and add missing columns to captcha_config table
             if await self._table_exists(db, "captcha_config"):
                 captcha_columns_to_add = [
+                    ("extension_auth_key", "TEXT DEFAULT ''"),
+                    ("extension_refresh_interval", "INTEGER DEFAULT 2"),
+                    ("extension_max_consecutive_errors", "INTEGER DEFAULT 5"),
                     ("browser_proxy_enabled", "BOOLEAN DEFAULT 0"),
                     ("browser_proxy_url", "TEXT"),
                     (
@@ -923,6 +939,9 @@ class Database:
             await db.execute("""
                 CREATE TABLE IF NOT EXISTS captcha_config (
                     id INTEGER PRIMARY KEY DEFAULT 1,
+                    extension_auth_key TEXT DEFAULT '',
+                    extension_refresh_interval INTEGER DEFAULT 2,
+                    extension_max_consecutive_errors INTEGER DEFAULT 5,
                     captcha_method TEXT DEFAULT 'yescaptcha',
                     yescaptcha_api_key TEXT DEFAULT '',
                     yescaptcha_base_url TEXT DEFAULT 'https://api.yescaptcha.com',
@@ -2090,6 +2109,11 @@ class Database:
         # Reload captcha config
         captcha_config = await self.get_captcha_config()
         if captcha_config:
+            config.set_extension_config(
+                captcha_config.extension_auth_key,
+                captcha_config.extension_refresh_interval,
+                captcha_config.extension_max_consecutive_errors,
+            )
             config.set_captcha_method(captcha_config.captcha_method)
             config.set_yescaptcha_api_key(captcha_config.yescaptcha_api_key)
             config.set_yescaptcha_base_url(captcha_config.yescaptcha_base_url)
@@ -2300,6 +2324,9 @@ class Database:
         personal_max_resident_tabs: int = None,
         browser_personal_fresh_restart_every_n_solves: int = None,
         personal_idle_tab_ttl_seconds: int = None,
+        extension_auth_key: Optional[str] = None,
+        extension_refresh_interval: Optional[int] = None,
+        extension_max_consecutive_errors: Optional[int] = None,
     ):
         """Update captcha configuration"""
         async with self._connect(write=True) as db:
@@ -2628,6 +2655,17 @@ class Database:
                     twocaptcha_base_url
                     if twocaptcha_base_url is not None
                     else previous_captcha.get("twocaptcha_base_url", "https://api.2captcha.com"),
+                ),
+            )
+            await db.execute(
+                "UPDATE captcha_config SET extension_auth_key = ?, extension_refresh_interval = ?, extension_max_consecutive_errors = ? WHERE id = 1",
+                (
+                    extension_auth_key if extension_auth_key is not None
+                    else previous_captcha.get("extension_auth_key", ""),
+                    extension_refresh_interval if extension_refresh_interval is not None
+                    else previous_captcha.get("extension_refresh_interval", 2),
+                    extension_max_consecutive_errors if extension_max_consecutive_errors is not None
+                    else previous_captcha.get("extension_max_consecutive_errors", 5),
                 ),
             )
             await db.commit()

@@ -390,6 +390,25 @@ class Config:
 
     # Captcha configuration
     @property
+    def extension_auth_key(self) -> str:
+        return self._config.get("captcha", {}).get("extension_auth_key", "")
+
+    @property
+    def extension_refresh_interval(self) -> int:
+        return self._config.get("captcha", {}).get("extension_refresh_interval", 2)
+
+    @property
+    def extension_max_consecutive_errors(self) -> int:
+        return self._config.get("captcha", {}).get("extension_max_consecutive_errors", 5)
+
+    def set_extension_config(self, key: str, refresh_interval: int, max_errors: int):
+        self._config.setdefault("captcha", {}).update(
+            extension_auth_key=key,
+            extension_refresh_interval=refresh_interval,
+            extension_max_consecutive_errors=max_errors,
+        )
+
+    @property
     def captcha_method(self) -> str:
         """Get captcha method"""
         return self._config.get("captcha", {}).get("captcha_method", "yescaptcha")

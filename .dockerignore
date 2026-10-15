@@ -45,6 +45,11 @@ ENV/
 .DS_Store
 
 # Project specific
+.initial-credentials
+config/setting.toml
+data/
+browser_data*/
+artifacts/
 data/*.db
 data/*.db-journal
 tmp/*

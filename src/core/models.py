@@ -189,6 +189,9 @@ class CaptchaConfig(BaseModel):
     """Captcha configuration"""
 
     id: int = 1
+    extension_auth_key: str = ""
+    extension_refresh_interval: int = 2
+    extension_max_consecutive_errors: int = 5
     captcha_method: str = (
         "yescaptcha"  # yescaptcha/captcharun/twocaptcha/capsolver/ezcaptcha/browser/personal/remote_browser
     )

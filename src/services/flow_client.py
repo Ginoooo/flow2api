@@ -5130,6 +5130,23 @@ class _FlowClientBase(FlowFrontendMixin):
             f"[reCAPTCHA] 开始获取 token: method={captcha_method}, project_id={project_id}, action={action}"
         )
 
+        if captcha_method == "extension_ws":
+            from .extension_captcha import ExtensionCaptchaService
+
+            try:
+                captcha_cfg = await self.db.get_captcha_config() if self.db else None
+                token = await ExtensionCaptchaService.get_instance().get_token(
+                    action=action,
+                    site_key=getattr(captcha_cfg, "website_key", "6LdsFiUsAAAAAIjVDZcuLhaHiDn5nnHVXVRQGeMV"),
+                    timeout=45 if action == "VIDEO_GENERATION" else 25,
+                )
+                self._set_request_fingerprint(None)
+                return token, None
+            except Exception as exc:
+                debug_logger.log_error(f"[reCAPTCHA ExtensionPool] {type(exc).__name__}")
+                self._set_request_fingerprint(None)
+                return None, None
+
         if captcha_method == "extension":
             try:
                 from .browser_captcha_extension import ExtensionCaptchaService

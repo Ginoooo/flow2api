@@ -119,6 +119,34 @@ docker compose -f docker-compose.headed.yml logs -f
 - API 端口：`8000`
 - 进入管理后台后，将验证码方式设为 `browser` 或 `personal`
 
+#### 桌面浏览器插件打码（extension_ws）
+
+本 fork 按功能移植了 [PR #102](https://github.com/TheSmallHanCat/flow2api/pull/102) 的
+[`8c2648c`](https://github.com/TheSmallHanCat/flow2api/commit/8c2648cd7635132573cce7c3f72928b43bf93d79)，
+并适配当前 Google Cookies 账号模型，补齐配置持久化、连接鉴权和代理认证。
+不需要额外的 solver 容器。旧 `extension` / `/captcha_ws` 账户路由协议保持兼容，
+新插件池使用 `extension_ws` / `/ws/captcha`，两者不会自动混用。
+
+1. 在专用 Chrome/Chromium 配置中打开 `chrome://extensions`，开启开发者模式，加载仓库的 `chrome-extension` 目录。
+2. 在管理页的验证码配置中选择“浏览器插件打码（插件池）”，生成连接密钥。新密钥仅在生成/轮换时显示，复制后配置到插件；遗失时应重新轮换。
+3. 插件填写管理页显示的 WebSocket 地址（公网必须使用 `wss://`）、独立打码密钥和客户端名称，保存后连接。此密钥不同于管理员会话、API Key 和 Cookie 更新插件 Token。
+4. 在该浏览器中登录 Google，并确认 `https://flow.google.com/` 可正常访问。在管理页中测试对应客户端，取码成功后保存新的打码方式。
+5. 服务中仍需添加有效 Flow 账号及 Google Cookies，才能执行图片/视频生成。此扩展只获取验证码，不同步账号 Cookie；客户端测试成功不代表真实生成已通过。
+
+插件支持多个客户端轮询、单客户端串行求解、标签页复用/刷新、客户端启停、测试和连续失败自动禁用。
+连续失败阈值设为 `0` 可关闭自动禁用，手动启用会重置失败计数。
+客户端与等待请求保存在内存中，服务必须使用**单个 Uvicorn worker**；重启后浏览器会自动重连。
+服务端未配置密钥时拒绝连接，轮换密钥会断开已有客户端并废止尚未完成的旧握手。
+
+**浏览器代理：** 默认关闭。`proxy` 权限按 Chrome 要求在安装时声明，但只有启用后才修改此 Chrome 配置的整体代理。
+HTTP 代理可使用账号密码；第一次保存认证代理时，需要批准额外的 Web Request 和网站访问权限。
+SOCKS5 仅支持无认证，带账号密码的 SOCKS5 配置会被拒绝。关闭代理或手动断开插件会释放本扩展的代理控制，
+恢复浏览器原有设置；临时网络中断则会保留配置并尝试重连。控制面域名和本地/私网地址绕过插件代理。
+代理密码保存在该 Chrome 配置的本地存储中，不能视为加密保险库。浏览器出口与 API 请求出口可能不同，需用真实生成验证上游是否接受。
+
+连接配置还可通过公开模板中的 `extension_auth_key`、`extension_refresh_interval`、
+`extension_max_consecutive_errors` 初始化。已有数据库以管理页保存的配置为准，升级不会覆盖其他打码方式或账号。
+
 ### 方式二：本地部署
 
 ```bash

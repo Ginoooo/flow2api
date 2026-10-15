@@ -751,6 +751,19 @@ class CaptchaScoreTestRequest(BaseModel):
     enterprise: Optional[bool] = False
 
 
+class ExtensionConfigRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    refresh_interval: Optional[int] = Field(default=None, ge=1, le=1000, strict=True)
+    max_consecutive_errors: Optional[int] = Field(default=None, ge=0, le=100, strict=True)
+    regenerate_key: bool = Field(default=False, strict=True)
+
+
+class ExtensionClientRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    client_id: str = Field(min_length=1, max_length=64)
+    enabled: bool = Field(default=True, strict=True)
+
+
 class GenerationConfigRequest(BaseModel):
     image_timeout: Optional[int] = None
     video_timeout: Optional[int] = None
@@ -1968,6 +1981,8 @@ async def update_captcha_config(
 ):
     """Update captcha configuration"""
     captcha_method = request.get("captcha_method")
+    if captcha_method == "extension_ws" and not config.extension_auth_key:
+        raise HTTPException(status_code=400, detail="Configure a browser solver key first")
     yescaptcha_api_key = request.get("yescaptcha_api_key")
     yescaptcha_base_url = request.get("yescaptcha_base_url")
     yescaptcha_task_type = normalize_yescaptcha_task_type(
@@ -2124,6 +2139,7 @@ async def get_captcha_config(token: str = Depends(verify_admin_token)):
     captcha_config = await db.get_captcha_config()
     return {
         "captcha_method": captcha_config.captcha_method,
+        "extension_key_configured": bool(captcha_config.extension_auth_key),
         "yescaptcha_api_key": captcha_config.yescaptcha_api_key,
         "yescaptcha_base_url": captcha_config.yescaptcha_base_url,
         "yescaptcha_task_type": captcha_config.yescaptcha_task_type,
@@ -2148,6 +2164,68 @@ async def get_captcha_config(token: str = Depends(verify_admin_token)):
         "browser_personal_fresh_restart_every_n_solves": captcha_config.browser_personal_fresh_restart_every_n_solves,
         "personal_idle_tab_ttl_seconds": captcha_config.personal_idle_tab_ttl_seconds,
     }
+
+
+@router.get("/api/captcha/extension-status")
+async def get_extension_status(token: str = Depends(verify_admin_token)):
+    from ..services.extension_captcha import ExtensionCaptchaService
+
+    service = ExtensionCaptchaService.get_instance()
+    return {
+        "success": True,
+        "connected_clients": len(service.get_clients_info()),
+        "has_clients": service.has_clients,
+        "key_configured": bool(config.extension_auth_key),
+        "refresh_interval": config.extension_refresh_interval,
+        "max_consecutive_errors": config.extension_max_consecutive_errors,
+        "clients": service.get_clients_info(),
+        "total_requests": service.stats["total_requests"],
+        "success_count": service.stats["success"],
+        "error_count": service.stats["errors"],
+    }
+
+
+@router.post("/api/captcha/extension-config")
+async def update_extension_config(request: ExtensionConfigRequest,
+                                  token: str = Depends(verify_admin_token)):
+    from ..services.extension_captcha import ExtensionCaptchaService
+
+    new_key = secrets.token_urlsafe(32) if request.regenerate_key else None
+    await db.update_captcha_config(
+        extension_auth_key=new_key,
+        extension_refresh_interval=request.refresh_interval,
+        extension_max_consecutive_errors=request.max_consecutive_errors,
+    )
+    await db.reload_config_to_memory()
+    await ExtensionCaptchaService.get_instance().configure(
+        config.extension_auth_key, config.extension_refresh_interval,
+        config.extension_max_consecutive_errors,
+    )
+    result = {"success": True, "key_configured": bool(config.extension_auth_key)}
+    if new_key is not None:
+        result["auth_key"] = new_key
+    return result
+
+
+@router.post("/api/captcha/extension-client-toggle")
+async def toggle_extension_client(request: ExtensionClientRequest,
+                                  token: str = Depends(verify_admin_token)):
+    from ..services.extension_captcha import ExtensionCaptchaService
+
+    return {"success": ExtensionCaptchaService.get_instance().set_client_enabled(
+        request.client_id, request.enabled,
+    )}
+
+
+@router.post("/api/captcha/extension-client-test")
+async def test_extension_client(request: ExtensionClientRequest,
+                                token: str = Depends(verify_admin_token)):
+    from ..services.extension_captcha import ExtensionCaptchaService
+
+    captcha_cfg = await db.get_captcha_config()
+    return await ExtensionCaptchaService.get_instance().test_client(
+        request.client_id, captcha_cfg.website_key,
+    )
 
 
 @router.get("/api/captcha/browser-stats")

@@ -5,7 +5,7 @@ import os
 import sys
 import warnings
 
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, Request, WebSocket
 from fastapi.responses import HTMLResponse, FileResponse, Response, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
@@ -123,6 +123,14 @@ async def lifespan(app: FastAPI):
     generation_handler.file_cache.set_timeout(config.cache_timeout)
     cache_cleanup_enabled = await generation_handler.file_cache.refresh_cleanup_task()
     captcha_config = await db.get_captcha_config()
+    from .services.extension_captcha import ExtensionCaptchaService
+
+    extension_service = ExtensionCaptchaService.get_instance()
+    await extension_service.configure(
+        captcha_config.extension_auth_key,
+        captcha_config.extension_refresh_interval,
+        captcha_config.extension_max_consecutive_errors,
+    )
 
     # 尽量在浏览器服务启动前就拿到 token 快照，后续并发管理和预热共用。
     tokens = await token_manager.get_all_tokens()
@@ -239,6 +247,7 @@ async def lifespan(app: FastAPI):
 
     # Shutdown
     print("Flow2API Shutting down...")
+    await extension_service.close()
     # Stop file cache cleanup task
     await generation_handler.file_cache.stop_cleanup_task()
     # Stop auto-unban task
@@ -297,6 +306,21 @@ app.add_middleware(
 # Include routers
 app.include_router(routes.router)
 app.include_router(admin.router)
+
+
+@app.websocket("/ws/captcha")
+async def ws_captcha(websocket: WebSocket):
+    from .services.extension_captcha import ExtensionCaptchaService
+
+    await ExtensionCaptchaService.get_instance().handle_websocket(websocket)
+
+
+@app.get("/static/extension-captcha.js", include_in_schema=False)
+async def extension_captcha_script():
+    return FileResponse(
+        Path(__file__).parent.parent / "static" / "extension-captcha.js",
+        media_type="text/javascript",
+    )
 
 # Static files - serve tmp directory for cached files
 tmp_dir = Path(__file__).parent.parent / "tmp"

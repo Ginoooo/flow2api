@@ -368,8 +368,24 @@
                                 <option value="browser">有头浏览器打码</option>
                                 <option value="personal">内置浏览器打码</option>
                                 <option value="remote_browser">远程有头打码</option>
+                                <option value="extension_ws">浏览器插件打码（插件池）</option>
                             </select>
                             <p class="text-xs text-muted-foreground mt-1">选择验证码获取方式</p>
+                        </div>
+
+                        <div id="extensionOptions" class="space-y-4" style="display:none">
+                            <div class="text-sm" id="extensionSummary" role="status"></div>
+                            <label class="text-sm font-medium block" for="extensionWsUrl">WebSocket 地址</label>
+                            <input id="extensionWsUrl" readonly class="flex h-9 w-full rounded-md border border-input bg-background px-3 py-2 text-sm">
+                            <button type="button" id="extensionRotateKey" class="inline-flex items-center justify-center rounded-md border border-input h-9 px-3 text-sm">生成 / 轮换连接密钥</button>
+                            <input id="extensionNewKey" type="password" readonly autocomplete="off" aria-label="新连接密钥" class="flex h-9 w-full rounded-md border border-input bg-background px-3 py-2 text-sm" style="display:none">
+                            <button type="button" id="extensionCopyKey" style="display:none" class="inline-flex items-center justify-center rounded-md border border-input h-9 px-3 text-sm">复制新密钥</button>
+                            <label class="text-sm font-medium block" for="extensionRefresh">标签页刷新间隔（次）</label>
+                            <input id="extensionRefresh" type="number" min="1" max="1000" value="2" class="flex h-9 w-full rounded-md border border-input bg-background px-3 py-2 text-sm">
+                            <label class="text-sm font-medium block" for="extensionMaxErrors">连续失败禁用阈值（0 为关闭）</label>
+                            <input id="extensionMaxErrors" type="number" min="0" max="100" value="5" class="flex h-9 w-full rounded-md border border-input bg-background px-3 py-2 text-sm">
+                            <button type="button" id="extensionSave" class="inline-flex items-center justify-center rounded-md border border-input h-9 px-3 text-sm">保存插件配置</button>
+                            <div id="extensionClients" class="space-y-3"></div>
                         </div>
 
                         <!-- YesCaptcha配置选项 -->
@@ -1298,5 +1314,6 @@
 
         window.addEventListener('DOMContentLoaded',()=>{refreshTokens();loadATAutoRefreshConfig()});
     </script>
+    <script src="/static/extension-captcha.js"></script>
 </body>
 </html>
