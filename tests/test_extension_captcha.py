@@ -58,6 +58,24 @@ class ExtensionServiceTests(unittest.IsolatedAsyncioTestCase):
             socket.close.assert_awaited()
             await self.service.configure("fixture-key")
 
+    async def test_malformed_auth_cannot_join_pool(self):
+        for message in (
+            None,
+            [],
+            "auth",
+            {},
+            {"type": "ping", "key": "fixture-key"},
+            {"type": "auth", "key": 123},
+            {"type": "auth", "key": "x" * 257},
+        ):
+            with self.subTest(message=message):
+                socket = SolverSocket()
+                await socket.messages.put(message)
+                await self.service.handle_websocket(socket)
+                self.assertEqual((await socket.sent.get())["type"], "auth_fail")
+                self.assertFalse(self.service.has_clients)
+                socket.close.assert_awaited_once_with(code=1008)
+
     async def test_only_owner_can_return_nonempty_token(self):
         owner = await self.connect()
         other = await self.connect()
@@ -114,6 +132,64 @@ class ExtensionServiceTests(unittest.IsolatedAsyncioTestCase):
         request = await socket.sent.get()
         await socket.messages.put({"type": "result", "id": request["id"], "token": "next"})
         self.assertEqual(await second, "next")
+        self.assertFalse(self.service._pending)
+
+    async def test_idle_clients_rotate_without_leaving_busy_slots(self):
+        first = await self.connect()
+        second = await self.connect()
+        for socket in (first, second, first):
+            task = asyncio.create_task(self.service.get_token())
+            request = await asyncio.wait_for(socket.sent.get(), timeout=1)
+            await socket.messages.put({
+                "type": "result", "id": request["id"], "token": "solved",
+            })
+            self.assertEqual(await task, "solved")
+        self.assertEqual(self.service.stats["success"], 3)
+        self.assertFalse(self.service._pending)
+        self.assertTrue(all(not client.busy for client in self.service._clients.values()))
+
+    async def test_queued_timeout_and_cancellation_preserve_active_request(self):
+        socket = await self.connect()
+        active = asyncio.create_task(self.service.get_token())
+        request = await socket.sent.get()
+        client = next(iter(self.service._clients.values()))
+
+        with self.assertRaises(TimeoutError):
+            await self.service.get_token(timeout=0.01)
+        queued = asyncio.create_task(self.service.get_token())
+        await asyncio.sleep(0)
+        queued.cancel()
+        with self.assertRaises(asyncio.CancelledError):
+            await queued
+
+        self.assertTrue(socket.sent.empty())
+        self.assertTrue(client.busy)
+        self.assertEqual(client.error_count, 0)
+        self.assertEqual(self.service._waiting, 1)
+        self.assertEqual(len(self.service._pending), 1)
+        await socket.messages.put({
+            "type": "result", "id": request["id"], "token": "active-result",
+        })
+        self.assertEqual(await active, "active-result")
+        self.assertFalse(client.busy)
+        self.assertFalse(self.service._pending)
+        self.assertEqual(self.service._waiting, 0)
+
+    async def test_disabled_client_still_accepts_explicit_diagnostic_request(self):
+        socket = await self.connect()
+        client = next(iter(self.service._clients.values()))
+        self.service.set_client_enabled(client.client_id, False)
+        with self.assertRaisesRegex(RuntimeError, "No authenticated browser solver"):
+            await self.service.get_token()
+
+        task = asyncio.create_task(self.service.get_token(client_id=client.client_id))
+        request = await asyncio.wait_for(socket.sent.get(), timeout=1)
+        await socket.messages.put({
+            "type": "result", "id": request["id"], "token": "diagnostic-result",
+        })
+        self.assertEqual(await task, "diagnostic-result")
+        self.assertFalse(client.enabled)
+        self.assertFalse(client.busy)
         self.assertFalse(self.service._pending)
 
     async def test_key_rotation_rejects_in_progress_old_handshake(self):

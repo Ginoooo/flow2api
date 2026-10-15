@@ -28,13 +28,13 @@ class ClientInfo:
 class ExtensionCaptchaService:
     _instance: Optional["ExtensionCaptchaService"] = None
 
-    def __init__(self):
+    def __init__(self) -> None:
         self._auth_key = ""
         self._auth_generation = 0
         self.refresh_interval = 2
         self.max_consecutive_errors = 5
         self._clients: dict[str, ClientInfo] = {}
-        self._pending: dict[str, tuple[asyncio.Future, ClientInfo]] = {}
+        self._pending: dict[str, tuple[asyncio.Future[str], ClientInfo]] = {}
         self._changed = asyncio.Event()
         self._round_robin = 0
         self._waiting = 0
@@ -46,8 +46,12 @@ class ExtensionCaptchaService:
             cls._instance = cls()
         return cls._instance
 
-    async def configure(self, auth_key: str, refresh_interval: int = 2,
-                        max_consecutive_errors: int = 5):
+    async def configure(
+        self,
+        auth_key: str,
+        refresh_interval: int = 2,
+        max_consecutive_errors: int = 5,
+    ) -> None:
         if auth_key != self._auth_key:
             self._auth_key = auth_key
             self._auth_generation += 1
@@ -60,14 +64,14 @@ class ExtensionCaptchaService:
             except Exception:
                 self._drop_client(client)
 
-    def _config_message(self) -> dict:
+    def _config_message(self) -> dict[str, str | int]:
         return {"type": "config", "refreshInterval": self.refresh_interval}
 
     @property
     def has_clients(self) -> bool:
         return any(client.enabled for client in self._clients.values())
 
-    def get_clients_info(self) -> list[dict]:
+    def get_clients_info(self) -> list[dict[str, str | int | bool]]:
         return [
             {
                 "client_id": client.client_id,
@@ -96,14 +100,14 @@ class ExtensionCaptchaService:
         self._changed.set()
         return True
 
-    def _drop_client(self, client: ClientInfo):
+    def _drop_client(self, client: ClientInfo) -> None:
         self._clients.pop(client.client_id, None)
         for future, owner in list(self._pending.values()):
             if owner is client and not future.done():
                 future.set_exception(RuntimeError("Browser solver disconnected"))
         self._changed.set()
 
-    async def close(self):
+    async def close(self) -> None:
         for client in list(self._clients.values()):
             self._drop_client(client)
             try:
@@ -111,7 +115,19 @@ class ExtensionCaptchaService:
             except Exception:
                 pass
 
-    async def handle_websocket(self, websocket: WebSocket):
+    def _is_valid_auth(self, message: object, generation: int) -> bool:
+        if not isinstance(message, dict) or message.get("type") != "auth":
+            return False
+        key = message.get("key")
+        return (
+            isinstance(key, str)
+            and len(key) <= 256
+            and bool(self._auth_key)
+            and generation == self._auth_generation
+            and secrets.compare_digest(key.encode(), self._auth_key.encode())
+        )
+
+    async def handle_websocket(self, websocket: WebSocket) -> None:
         if not self._auth_key:
             await websocket.close(code=1008)
             return
@@ -124,11 +140,7 @@ class ExtensionCaptchaService:
         )
         try:
             auth = await asyncio.wait_for(websocket.receive_json(), timeout=10)
-            key = auth.get("key") if isinstance(auth, dict) else None
-            if (not isinstance(key, str) or len(key) > 256
-                    or auth.get("type") != "auth" or not self._auth_key
-                    or auth_generation != self._auth_generation
-                    or not secrets.compare_digest(key.encode(), self._auth_key.encode())):
+            if not self._is_valid_auth(auth, auth_generation):
                 await websocket.send_json({"type": "auth_fail", "error": "Invalid solver key"})
                 await websocket.close(code=1008)
                 return
@@ -153,7 +165,7 @@ class ExtensionCaptchaService:
         finally:
             self._drop_client(client)
 
-    async def _handle_message(self, client: ClientInfo, message: dict):
+    async def _handle_message(self, client: ClientInfo, message: dict) -> None:
         if self._clients.get(client.client_id) is not client:
             return
         if message.get("type") == "ping":
@@ -172,9 +184,36 @@ class ExtensionCaptchaService:
             else:
                 future.set_result(token)
 
-    async def get_token(self, action: str = "IMAGE_GENERATION", site_key: str = "",
-                        timeout: float = 25, client_id: Optional[str] = None) -> str:
-        if not self._auth_key or not self.has_clients and client_id is None:
+    async def _acquire_client(self, client_id: Optional[str]) -> ClientInfo:
+        while True:
+            if client_id:
+                available = [
+                    client for client in self._clients.values()
+                    if client.client_id == client_id
+                ]
+            else:
+                available = [
+                    client for client in self._clients.values() if client.enabled
+                ]
+            if not available:
+                raise RuntimeError("No authenticated browser solver available")
+            idle = [client for client in available if not client.busy]
+            if idle:
+                client = idle[self._round_robin % len(idle)]
+                self._round_robin += 1
+                client.busy = True
+                return client
+            self._changed.clear()
+            await self._changed.wait()
+
+    async def get_token(
+        self,
+        action: str = "IMAGE_GENERATION",
+        site_key: str = "",
+        timeout: float = 25,
+        client_id: Optional[str] = None,
+    ) -> str:
+        if not self._auth_key or (not self.has_clients and client_id is None):
             raise RuntimeError("No authenticated browser solver available")
         if self._waiting >= 128:
             raise RuntimeError("Browser solver queue is full")
@@ -182,25 +221,11 @@ class ExtensionCaptchaService:
         deadline = time.monotonic() + timeout
         client = None
         request_id = uuid.uuid4().hex
-        future = asyncio.get_running_loop().create_future()
+        future: asyncio.Future[str] = asyncio.get_running_loop().create_future()
         self.stats["total_requests"] += 1
         try:
             async with asyncio.timeout(timeout):
-                while client is None:
-                    available = [
-                        item for item in self._clients.values()
-                        if (item.client_id == client_id if client_id else item.enabled)
-                    ]
-                    if not available:
-                        raise RuntimeError("No authenticated browser solver available")
-                    idle = [item for item in available if not item.busy]
-                    if idle:
-                        client = idle[self._round_robin % len(idle)]
-                        self._round_robin += 1
-                        client.busy = True
-                    else:
-                        self._changed.clear()
-                        await self._changed.wait()
+                client = await self._acquire_client(client_id)
                 self._pending[request_id] = (future, client)
                 await client.ws.send_json({
                     "type": "solve", "id": request_id, "action": action,
