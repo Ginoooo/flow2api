@@ -46,6 +46,7 @@ ENV/
 
 # Project specific
 .initial-credentials
+token-updater/
 config/setting.toml
 data/
 browser_data*/

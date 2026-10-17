@@ -4,13 +4,20 @@ import json
 import random
 import re
 import uuid
+from http.cookiejar import CookieJar
 from typing import Any, Dict, List, Optional
 from urllib.parse import quote, urlencode, urlparse
 
+from curl_cffi import CurlInfo
 from curl_cffi.requests import AsyncSession
 
 from ..core.logger import debug_logger
 from .browser_cookie_utils import serialize_cookie_header_for_url
+from .protocol_login import (
+    _cookie_jar,
+    _cookie_jar_from_curl_snapshot,
+    _export_cookie_jar,
+)
 
 
 class FlowFrontendMixin:
@@ -624,6 +631,7 @@ class FlowFrontendMixin:
         page_url: str,
         cookie_header: str,
         timeout: int,
+        cookie_jar: Optional[CookieJar] = None,
     ) -> str:
         proxy_url = None
         if self.proxy_manager:
@@ -640,7 +648,12 @@ class FlowFrontendMixin:
             "Referer": "https://flow.google.com/",
             "User-Agent": self._get_effective_request_user_agent(),
         }
-        async with AsyncSession(trust_env=False) as session:
+        session_kwargs: Dict[str, Any] = {"trust_env": False}
+        if cookie_jar is not None:
+            headers.pop("Cookie")
+            session_kwargs["cookies"] = cookie_jar
+            session_kwargs["curl_infos"] = [CurlInfo.COOKIELIST]
+        async with AsyncSession(**session_kwargs) as session:
             response = await session.get(
                 page_url,
                 headers=headers,
@@ -648,6 +661,13 @@ class FlowFrontendMixin:
                 timeout=max(10, min(int(timeout or 30), 30)),
                 impersonate=self._resolve_runtime_impersonate(),
             )
+            if cookie_jar is not None:
+                refreshed = _cookie_jar_from_curl_snapshot(
+                    response.infos[CurlInfo.COOKIELIST]
+                )
+                cookie_jar.clear()
+                for cookie in refreshed:
+                    cookie_jar.set_cookie(cookie)
         response_host = str(urlparse(str(response.url)).hostname or "").lower()
         if response.status_code in {401, 403} or (
             response_host and response_host != "flow.google.com"
@@ -683,10 +703,13 @@ class FlowFrontendMixin:
         )
         if not bootstrap_cookie_header:
             raise RuntimeError("Flow frontend RPC requires Google session cookies")
+        original_cookies = cookie_storage or cookie_header
+        request_cookie_jar = _cookie_jar(original_cookies)
         bootstrap_text = await self._load_flow_frontend_bootstrap(
             page_url,
             bootstrap_cookie_header,
             timeout,
+            cookie_jar=request_cookie_jar,
         )
         bootloader_match = re.search(
             r"boq_labs-ai-sandbox-frontend_[A-Za-z0-9_.-]+",
@@ -706,10 +729,8 @@ class FlowFrontendMixin:
             f"&f.sid={frontend_session_id}&hl=en"
             f"&_reqid={request_counter}&rt=c"
         )
-        rpc_cookie_header = (
-            serialize_cookie_header_for_url(cookie_storage, url)
-            if str(cookie_storage or "").strip()
-            else cookie_header
+        rpc_cookie_header = serialize_cookie_header_for_url(
+            _export_cookie_jar(request_cookie_jar, original_cookies), url
         )
         if not rpc_cookie_header:
             raise RuntimeError("Flow frontend RPC requires Google session cookies")

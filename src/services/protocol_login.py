@@ -4,7 +4,7 @@ import hashlib
 import json
 import re
 from http.cookiejar import Cookie, CookieJar
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Iterable, Optional
 from urllib.parse import urlparse
 
 from curl_cffi import CurlInfo
@@ -86,6 +86,14 @@ def _cookie_jar(raw: str) -> CookieJar:
     return jar
 
 
+def _cookie_jar_from_curl_snapshot(snapshot: Iterable[str]) -> CookieJar:
+    cookies = Cookies()
+    cookies.update_cookies_from_curl([
+        CurlMorsel.from_curl_format(line) for line in snapshot
+    ])
+    return cookies.jar
+
+
 def _export_cookie_jar(jar: CookieJar, original: str) -> str:
     # libcurl retains HTTP scope/expiry but does not expose SameSite metadata.
     original_attributes = {
@@ -165,15 +173,11 @@ class ProtocolLogin:
                 )
                 # The Python session jar only merges updates; a fresh snapshot also
                 # honors cookies deleted by Set-Cookie, including during redirects.
-                refreshed_jar = Cookies()
-                refreshed_jar.update_cookies_from_curl(
-                    [
-                        CurlMorsel.from_curl_format(line)
-                        for line in response.infos[CurlInfo.COOKIELIST]
-                    ]
+                refreshed_jar = _cookie_jar_from_curl_snapshot(
+                    response.infos[CurlInfo.COOKIELIST]
                 )
                 refreshed_cookies = _export_cookie_jar(
-                    refreshed_jar.jar, google_cookies_raw
+                    refreshed_jar, google_cookies_raw
                 )
             response_host = str(urlparse(str(response.url)).hostname or "").lower()
             if response_host and response_host != "flow.google.com":

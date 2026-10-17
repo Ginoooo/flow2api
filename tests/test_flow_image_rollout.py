@@ -6,6 +6,8 @@ import unittest
 from unittest.mock import AsyncMock, Mock, PropertyMock, patch
 from urllib.parse import parse_qs, urlparse
 
+from curl_cffi import CurlInfo
+
 from src.api.routes import _get_gemini_model_catalog, _get_openai_model_catalog
 from src.core.config import config
 from src.core.model_resolver import resolve_model_name
@@ -56,6 +58,42 @@ class ImageRpcAuthenticationTests(unittest.IsolatedAsyncioTestCase):
             [f"/project/{PROJECT_ID}"],
         )
         self.assertTrue(request["redact_sensitive_logs"])
+
+    async def test_rpc_preserves_bootstrap_cookie_rotations_and_deletions(self):
+        self.client._load_flow_frontend_bootstrap = (
+            FlowClient._load_flow_frontend_bootstrap.__get__(self.client, FlowClient)
+        )
+        response = types.SimpleNamespace(
+            text=self.bootstrap,
+            url="https://flow.google.com/projects",
+            status_code=200,
+            infos={CurlInfo.COOKIELIST: [
+                b"flow.google.com\tFALSE\t/\tTRUE\t0\tOSID\trotated-session",
+                b".google.com\tTRUE\t/\tTRUE\t0\tSID\taccount-cookie",
+            ]},
+        )
+        session = Mock()
+        session.__aenter__ = AsyncMock(return_value=session)
+        session.__aexit__ = AsyncMock(return_value=False)
+        session.get = AsyncMock(return_value=response)
+        cookies = json.dumps([
+            {"name": "OSID", "value": "old-session", "domain": "flow.google.com", "hostOnly": True, "path": "/"},
+            {"name": "SID", "value": "account-cookie", "domain": ".google.com", "path": "/"},
+            {"name": "SIDCC", "value": "deleted-cookie", "domain": ".google.com", "path": "/"},
+        ])
+        with patch("src.services.flow_frontend.AsyncSession", return_value=session):
+            await self.client._call_flow_frontend_rpc(
+                rpc_id="ogiZ0b",
+                argument=[],
+                cookie_header="",
+                cookie_storage=cookies,
+                timeout=10,
+            )
+        request = self.client._make_text_request.call_args.kwargs
+        self.assertEqual(
+            request["headers"]["Cookie"],
+            "OSID=rotated-session; SID=account-cookie",
+        )
 
     async def test_expired_xsrf_replacement_preserves_body_without_duplicate_at(self):
         self.client._make_text_request.side_effect = [

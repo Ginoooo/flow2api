@@ -35,6 +35,11 @@ from ..core.browser_runtime_status import (
 from ..core.monitoring import build_public_health_snapshot
 from ..services.token_manager import TokenManager
 from ..services.proxy_manager import ProxyManager
+from ..services.protocol_login import (
+    _cookie_jar,
+    extract_flow_account_email,
+)
+from ..services.browser_cookie_utils import serialize_cookie_header_for_url
 from ..services.concurrency_manager import ConcurrencyManager
 
 try:
@@ -2637,6 +2642,56 @@ async def test_captcha_score(
 # ========== Plugin Configuration Endpoints ==========
 
 
+async def _probe_plugin_google_session(
+    google_cookies: str,
+    email: str,
+    proxy_url: Optional[str],
+    mode: str,
+    user_agent: Optional[str] = None,
+) -> Dict[str, Any]:
+    url = "https://flow.google.com/projects"
+    headers = {"Referer": "https://flow.google.com/"}
+    session_options: Dict[str, Any] = {
+        "trust_env": False, "impersonate": "chrome", "timeout": 10,
+        "proxy": proxy_url,
+    }
+    try:
+        if mode == "cookie_jar":
+            session_options["cookies"] = _cookie_jar(google_cookies)
+        else:
+            headers["Cookie"] = serialize_cookie_header_for_url(google_cookies, url)
+        if user_agent:
+            headers["User-Agent"] = user_agent
+        async with AsyncSession(**session_options) as session:
+            response = await session.get(
+                url, headers=headers, allow_redirects=False,
+            )
+        account = (
+            extract_flow_account_email(response.text)
+            if response.status_code == 200 else ""
+        )
+        redirect = urlparse(response.headers.get("Location", ""))
+        return {
+            "mode": mode,
+            "http_status": response.status_code,
+            "account_known": bool(account),
+            "account_matches_config": bool(account) and account.casefold() == email.casefold(),
+            "xsrf_present": bool(re.search(r'"SNlM0e"\s*:\s*"[^\"]+"', response.text)),
+            "redirect_to_about": redirect.path.rstrip("/") == "/about",
+            "redirect_to_google_login": redirect.hostname == "accounts.google.com",
+            "device_session_header_present": any(
+                str(name).lower().startswith("sec-session")
+                for name in response.headers
+            ),
+        }
+    except Exception as error:
+        return {
+            "mode": mode,
+            "error_type": type(error).__name__,
+            "curl_code": getattr(error, "code", None),
+        }
+
+
 async def _verify_plugin_connection_token(authorization: Optional[str]) -> None:
     plugin_config = await db.get_plugin_config()
     provided_token = ""
@@ -2724,6 +2779,52 @@ async def update_plugin_config(request: dict, token: str = Depends(verify_admin_
         "message": "插件配置更新成功",
         "connection_token": connection_token,
         "auto_enable_on_update": auto_enable_on_update,
+    }
+
+
+@router.post("/api/plugin/session-diagnostic")
+async def plugin_session_diagnostic(
+    request: PluginTokenUpdateRequest,
+    authorization: Optional[str] = Header(None),
+    diagnostic_user_agent: Optional[str] = Header(
+        default=None, alias="X-Flow-Diagnostic-User-Agent", max_length=512,
+    ),
+    client_proxy: bool = False,
+):
+    """Compare Google session requests without storing credentials or accounts."""
+    await _verify_plugin_connection_token(authorization)
+    if diagnostic_user_agent and any(
+        ord(character) < 32 or ord(character) == 127
+        for character in diagnostic_user_agent
+    ):
+        raise HTTPException(status_code=400, detail="Invalid diagnostic User-Agent")
+    if client_proxy and not diagnostic_user_agent:
+        raise HTTPException(status_code=400, detail="Client proxy comparison requires browser User-Agent")
+    proxy_url = await proxy_manager.get_request_proxy_url()
+    probes = [
+        _probe_plugin_google_session(
+            request.google_cookies, request.login_account, proxy_url,
+            mode=mode,
+        )
+        for mode in ("cookie_jar", "raw_cookie")
+    ]
+    if diagnostic_user_agent:
+        probes.append(_probe_plugin_google_session(
+            request.google_cookies, request.login_account, proxy_url,
+            mode="raw_cookie_browser_ua", user_agent=diagnostic_user_agent,
+        ))
+    if client_proxy:
+        probes.append(_probe_plugin_google_session(
+            request.google_cookies, request.login_account,
+            "http://host.docker.internal:17895",
+            mode="raw_cookie_browser_ua_client_proxy", user_agent=diagnostic_user_agent,
+        ))
+    return {
+        "success": False,
+        "diagnostic_only": True,
+        "account_saved": False,
+        "client_proxy_requested": client_proxy,
+        "probes": await asyncio.gather(*probes),
     }
 
 

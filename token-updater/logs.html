@@ -1,0 +1,169 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>日志查看 - Flow2API Token Updater</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        body {
+            width: 600px;
+            height: 500px;
+            padding: 16px;
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            font-size: 13px;
+            color: #333;
+            background: #f5f5f5;
+        }
+        .header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 12px;
+            padding-bottom: 12px;
+            border-bottom: 2px solid #1a73e8;
+        }
+        h1 {
+            font-size: 16px;
+            color: #1a73e8;
+        }
+        .actions {
+            display: flex;
+            gap: 8px;
+        }
+        button {
+            padding: 6px 12px;
+            border: none;
+            border-radius: 4px;
+            font-size: 12px;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+        .btn-refresh {
+            background: #1a73e8;
+            color: white;
+        }
+        .btn-refresh:hover {
+            background: #1557b0;
+        }
+        .btn-clear {
+            background: #dc3545;
+            color: white;
+        }
+        .btn-clear:hover {
+            background: #c82333;
+        }
+        .btn-back {
+            background: #6c757d;
+            color: white;
+        }
+        .btn-back:hover {
+            background: #5a6268;
+        }
+        .logs-container {
+            height: 420px;
+            overflow-y: auto;
+            background: white;
+            border-radius: 4px;
+            padding: 8px;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+        }
+        .log-entry {
+            padding: 8px;
+            margin-bottom: 6px;
+            border-radius: 4px;
+            border-left: 3px solid #ccc;
+            background: #fafafa;
+            font-size: 12px;
+        }
+        .log-entry.INFO {
+            border-left-color: #1a73e8;
+            background: #e8f0fe;
+        }
+        .log-entry.SUCCESS {
+            border-left-color: #28a745;
+            background: #d4edda;
+        }
+        .log-entry.ERROR {
+            border-left-color: #dc3545;
+            background: #f8d7da;
+        }
+        .log-header {
+            display: flex;
+            justify-content: space-between;
+            margin-bottom: 4px;
+            font-weight: 500;
+        }
+        .log-level {
+            padding: 2px 6px;
+            border-radius: 3px;
+            font-size: 10px;
+            font-weight: bold;
+        }
+        .log-level.INFO {
+            background: #1a73e8;
+            color: white;
+        }
+        .log-level.SUCCESS {
+            background: #28a745;
+            color: white;
+        }
+        .log-level.ERROR {
+            background: #dc3545;
+            color: white;
+        }
+        .log-time {
+            color: #666;
+            font-size: 11px;
+        }
+        .log-message {
+            margin-bottom: 4px;
+            color: #333;
+        }
+        .log-details {
+            background: rgba(0,0,0,0.05);
+            padding: 6px;
+            border-radius: 3px;
+            font-family: 'Courier New', monospace;
+            font-size: 11px;
+            color: #555;
+            white-space: pre-wrap;
+            word-break: break-all;
+            max-height: 150px;
+            overflow-y: auto;
+        }
+        .empty-state {
+            text-align: center;
+            padding: 40px;
+            color: #999;
+        }
+        .empty-state-icon {
+            font-size: 48px;
+            margin-bottom: 12px;
+        }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <h1>📋 日志查看</h1>
+        <div class="actions">
+            <button class="btn-refresh" id="refreshBtn">🔄 刷新</button>
+            <button class="btn-clear" id="clearBtn">🗑️ 清空</button>
+            <button class="btn-back" id="backBtn">← 返回</button>
+        </div>
+    </div>
+
+    <div class="logs-container" id="logsContainer">
+        <div class="empty-state">
+            <div class="empty-state-icon">📝</div>
+            <div>加载中...</div>
+        </div>
+    </div>
+
+    <script src="logs.js"></script>
+</body>
+</html>

@@ -5,9 +5,12 @@ import types
 import unittest
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import httpx
 from curl_cffi import CurlInfo
 from curl_cffi.requests.cookies import CurlMorsel
+from fastapi import FastAPI
 
+from src.api import admin
 from src.core.models import Token
 from src.core.database import Database
 from src.services.protocol_login import ProtocolLogin, _cookie_jar, _export_cookie_jar
@@ -262,6 +265,266 @@ class ProtocolCookieRefreshTests(unittest.IsolatedAsyncioTestCase):
         )
         stored = json.loads(_export_cookie_jar(_cookie_jar(raw), raw))
         self.assertNotIn("partition-only", {cookie["name"] for cookie in stored})
+
+
+class PluginCookieValidationTests(unittest.IsolatedAsyncioTestCase):
+    async def asyncSetUp(self):
+        self.database = types.SimpleNamespace(
+            get_plugin_config=AsyncMock(return_value=types.SimpleNamespace(
+                connection_token="fixture-plugin-token", auto_enable_on_update=True,
+            )),
+            get_token_by_email=AsyncMock(return_value=None),
+        )
+        self.flow = types.SimpleNamespace(st_to_at=AsyncMock(return_value={
+            "access_token": "flow-frontend-cookie",
+        }))
+        self.manager = types.SimpleNamespace(
+            flow_client=self.flow,
+            add_token=AsyncMock(return_value=types.SimpleNamespace(id=7, email=EMAIL)),
+            update_token=AsyncMock(),
+            enable_token=AsyncMock(),
+        )
+        self.proxy = types.SimpleNamespace(
+            get_request_proxy_url=AsyncMock(return_value="http://fixture-proxy:7890"),
+        )
+        for name, value in (
+            ("db", self.database), ("token_manager", self.manager),
+            ("proxy_manager", self.proxy),
+        ):
+            patcher = patch.object(admin, name, value)
+            patcher.start()
+            self.addCleanup(patcher.stop)
+        patcher = patch(
+            "src.services.protocol_login.protocol_loginer.login",
+            new_callable=AsyncMock,
+        )
+        self.login = patcher.start()
+        self.addCleanup(patcher.stop)
+        self.login.return_value = {
+            "success": True, "email": EMAIL, "google_cookies": NEW_COOKIES,
+        }
+        app = FastAPI()
+        app.include_router(admin.router)
+        self.client = httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app), base_url="http://localhost",
+        )
+        self.addAsyncCleanup(self.client.aclose)
+
+    async def push(self, authorization="Bearer fixture-plugin-token"):
+        return await self.client.post(
+            "/api/plugin/update-token",
+            headers={"Authorization": authorization},
+            json={"login_account": EMAIL, "google_cookies": COOKIES},
+        )
+
+    async def test_plugin_uses_official_rpc_validation_without_web_identity_precheck(self):
+        self.login.side_effect = AssertionError("Unexpected extra web identity precheck")
+        response = await self.push()
+        self.assertEqual(response.status_code, 200, response.text)
+        self.login.assert_not_awaited()
+        self.flow.st_to_at.assert_awaited_once_with("", google_cookies=COOKIES)
+        self.assertEqual(self.manager.add_token.call_args.kwargs["google_cookies"], COOKIES)
+        self.assertEqual(self.manager.add_token.call_args.kwargs["login_account"], EMAIL)
+
+    async def test_invalid_connection_token_does_not_contact_google(self):
+        response = await self.push("Bearer wrong-fixture-token")
+        self.assertEqual(response.status_code, 401)
+        self.login.assert_not_awaited()
+        self.flow.st_to_at.assert_not_awaited()
+        self.manager.add_token.assert_not_awaited()
+
+    async def test_cookie_diagnostic_is_read_only_and_reports_only_probe_metadata(self):
+        async def report(google_cookies, email, proxy_url, mode, user_agent=None):
+            return {"mode": mode, "http_status": 200, "account_known": False}
+
+        with patch.object(
+            admin, "_probe_plugin_google_session", create=True, new_callable=AsyncMock,
+        ) as probe:
+            probe.side_effect = report
+            response = await self.client.post(
+                "/api/plugin/session-diagnostic",
+                headers={
+                    "Authorization": "Bearer fixture-plugin-token",
+                    "X-Flow-Diagnostic-User-Agent": "FixtureBrowser/1.0",
+                },
+                json={"login_account": EMAIL, "google_cookies": COOKIES},
+            )
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertTrue(response.json().get("diagnostic_only"))
+        self.assertFalse(response.json()["account_saved"])
+        self.assertFalse(response.json().get("client_proxy_requested", False))
+        self.assertEqual(probe.await_count, 3)
+        self.assertEqual(
+            {call.kwargs["mode"] for call in probe.await_args_list},
+            {"cookie_jar", "raw_cookie", "raw_cookie_browser_ua"},
+        )
+        self.assertNotIn("session-old", response.text)
+        self.assertNotIn(EMAIL, response.text)
+        self.login.assert_not_awaited()
+        self.flow.st_to_at.assert_not_awaited()
+        self.database.get_token_by_email.assert_not_awaited()
+        self.manager.add_token.assert_not_awaited()
+        self.manager.update_token.assert_not_awaited()
+
+    async def test_client_proxy_comparison_is_explicit_and_keeps_server_probes(self):
+        async def report(google_cookies, email, proxy_url, mode, user_agent=None):
+            return {"mode": mode, "http_status": 200, "account_known": False}
+
+        with patch.object(admin, "_probe_plugin_google_session", new_callable=AsyncMock) as probe:
+            probe.side_effect = report
+            response = await self.client.post(
+                "/api/plugin/session-diagnostic?client_proxy=true",
+                headers={
+                    "Authorization": "Bearer fixture-plugin-token",
+                    "X-Flow-Diagnostic-User-Agent": "FixtureBrowser/1.0",
+                },
+                json={"login_account": EMAIL, "google_cookies": COOKIES},
+            )
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertTrue(response.json().get("client_proxy_requested"))
+        self.assertEqual(probe.await_count, 4)
+        for call in probe.await_args_list:
+            if call.kwargs["mode"] == "raw_cookie_browser_ua_client_proxy":
+                self.assertEqual(call.args[2], "http://host.docker.internal:17895")
+                self.assertEqual(call.kwargs["user_agent"], "FixtureBrowser/1.0")
+            else:
+                self.assertEqual(call.args[2], "http://fixture-proxy:7890")
+        self.assertFalse(response.json()["account_saved"])
+        self.login.assert_not_awaited()
+        self.manager.add_token.assert_not_awaited()
+        self.manager.update_token.assert_not_awaited()
+
+    async def test_client_proxy_comparison_requires_browser_agent(self):
+        with patch.object(admin, "_probe_plugin_google_session", new_callable=AsyncMock) as probe:
+            response = await self.client.post(
+                "/api/plugin/session-diagnostic?client_proxy=true",
+                headers={"Authorization": "Bearer fixture-plugin-token"},
+                json={"login_account": EMAIL, "google_cookies": COOKIES},
+            )
+        self.assertEqual(response.status_code, 400)
+        probe.assert_not_awaited()
+        self.proxy.get_request_proxy_url.assert_not_awaited()
+
+    async def test_diagnostic_requires_connection_token_before_probing(self):
+        with patch.object(admin, "_probe_plugin_google_session", new_callable=AsyncMock) as probe:
+            response = await self.client.post(
+                "/api/plugin/session-diagnostic",
+                headers={"Authorization": "Bearer wrong-fixture-token"},
+                json={"login_account": EMAIL, "google_cookies": COOKIES},
+            )
+        self.assertEqual(response.status_code, 401)
+        probe.assert_not_awaited()
+        self.proxy.get_request_proxy_url.assert_not_awaited()
+
+    async def test_diagnostic_rejects_invalid_user_agent_without_probing(self):
+        for value, expected_status in (("Fixture\nInjected", 400), ("x" * 513, 422)):
+            with self.subTest(expected_status=expected_status):
+                with patch.object(admin, "_probe_plugin_google_session", new_callable=AsyncMock) as probe:
+                    response = await self.client.post(
+                        "/api/plugin/session-diagnostic",
+                        headers={
+                            "Authorization": "Bearer fixture-plugin-token",
+                            "X-Flow-Diagnostic-User-Agent": value,
+                        },
+                        json={"login_account": EMAIL, "google_cookies": COOKIES},
+                    )
+                self.assertEqual(response.status_code, expected_status, response.text)
+                probe.assert_not_awaited()
+
+    async def test_session_probes_preserve_scope_disable_redirects_and_redact_results(self):
+        session = MagicMock()
+        session.__aenter__.return_value = session
+        session.get = AsyncMock(return_value=types.SimpleNamespace(
+            status_code=200,
+            text=PAGE + ' "SNlM0e":"private-xsrf"',
+            headers={"Set-Cookie": "private-response-cookie", "Sec-Session-Challenge": "private-challenge"},
+        ))
+        for mode in ("cookie_jar", "raw_cookie", "raw_cookie_browser_ua"):
+            with self.subTest(mode=mode):
+                user_agent = "FixtureBrowser/1.0" if mode.endswith("browser_ua") else None
+                with patch("src.api.admin.AsyncSession", return_value=session) as factory:
+                    report = await admin._probe_plugin_google_session(
+                        COOKIES, EMAIL, "http://fixture-proxy:7890", mode, user_agent,
+                    )
+                self.assertTrue(report["account_known"])
+                self.assertTrue(report["account_matches_config"])
+                self.assertTrue(report["xsrf_present"])
+                self.assertTrue(report["device_session_header_present"])
+                request = session.get.call_args.kwargs
+                self.assertFalse(request["allow_redirects"])
+                self.assertEqual(factory.call_args.kwargs["timeout"], 10)
+                self.assertFalse(factory.call_args.kwargs["trust_env"])
+                if mode == "cookie_jar":
+                    self.assertIn("cookies", factory.call_args.kwargs)
+                    self.assertNotIn("Cookie", request["headers"])
+                else:
+                    self.assertEqual(request["headers"]["Cookie"], "OSID=session-old; SID=account-cookie")
+                self.assertEqual(request["headers"].get("User-Agent"), user_agent)
+                serialized = json.dumps(report)
+                for secret in (EMAIL, "session-old", "private-xsrf", "private-response-cookie", "private-challenge", "FixtureBrowser"):
+                    self.assertNotIn(secret, serialized)
+
+    async def test_probe_errors_never_echo_cookie_or_exception_text(self):
+        session = MagicMock()
+        session.__aenter__.return_value = session
+        session.get = AsyncMock(side_effect=RuntimeError(EMAIL + " session-old private-error"))
+        with patch("src.api.admin.AsyncSession", return_value=session):
+            report = await admin._probe_plugin_google_session(COOKIES, EMAIL, None, "raw_cookie")
+        self.assertEqual(report["error_type"], "RuntimeError")
+        malformed = await admin._probe_plugin_google_session("[private-malformed", EMAIL, None, "cookie_jar")
+        self.assertEqual(malformed["error_type"], "JSONDecodeError")
+        for secret in (EMAIL, "session-old", "private-error", "private-malformed"):
+            self.assertNotIn(secret, json.dumps([report, malformed]))
+
+    async def test_invalid_login_account_stops_before_rpc_or_storage(self):
+        for account in (None, "", "not-an-email"):
+            with self.subTest(account=account):
+                payload = {"google_cookies": COOKIES}
+                if account is not None:
+                    payload["login_account"] = account
+                response = await self.client.post(
+                    "/api/plugin/update-token",
+                    headers={"Authorization": "Bearer fixture-plugin-token"},
+                    json=payload,
+                )
+                self.assertEqual(response.status_code, 422)
+                self.assertTrue(any(
+                    error["loc"] == ["body", "login_account"]
+                    for error in response.json()["detail"]
+                ))
+        self.login.assert_not_awaited()
+        self.flow.st_to_at.assert_not_awaited()
+        self.database.get_token_by_email.assert_not_awaited()
+        self.manager.add_token.assert_not_awaited()
+        self.manager.update_token.assert_not_awaited()
+
+    async def test_rpc_rejection_does_not_store_or_report_web_identity_verification(self):
+        self.flow.st_to_at.side_effect = RuntimeError("rpc=nzlxg, code=401")
+        response = await self.push()
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("Google Cookie 验证失败", response.json()["detail"])
+        self.assertNotIn("网页账号", response.json()["detail"])
+        self.assertIn("rpc=nzlxg, code=401", response.json()["detail"])
+        self.assertNotIn(EMAIL, response.text)
+        self.assertNotIn("session-new", response.text)
+        self.login.assert_not_awaited()
+        self.database.get_token_by_email.assert_not_awaited()
+        self.manager.add_token.assert_not_awaited()
+        self.manager.update_token.assert_not_awaited()
+
+    async def test_existing_account_uses_uploaded_cookies_and_preserves_auto_enable(self):
+        self.database.get_token_by_email.return_value = types.SimpleNamespace(
+            id=7, is_active=False,
+        )
+        response = await self.push()
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(response.json()["action"], "updated")
+        self.assertTrue(response.json()["auto_enabled"])
+        self.assertEqual(self.manager.update_token.call_args.kwargs["google_cookies"], COOKIES)
+        self.assertEqual(self.manager.update_token.call_args.kwargs["login_account"], EMAIL)
+        self.login.assert_not_awaited()
+        self.manager.enable_token.assert_awaited_once_with(7)
+        self.manager.add_token.assert_not_awaited()
 
 
 class TokenCookieRefreshTests(unittest.IsolatedAsyncioTestCase):

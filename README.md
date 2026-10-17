@@ -147,6 +147,16 @@ SOCKS5 仅支持无认证，带账号密码的 SOCKS5 配置会被拒绝。关�
 连接配置还可通过公开模板中的 `extension_auth_key`、`extension_refresh_interval`、
 `extension_max_consecutive_errors` 初始化。已有数据库以管理页保存的配置为准，升级不会覆盖其他打码方式或账号。
 
+#### Cookie 自动同步（Token Updater）
+
+仓库提供独立的 [Token Updater 插件](token-updater/README.md)，用于将当前 Chrome 配置中的
+Google/Flow 登录 Cookie 同步到 `/api/plugin/update-token`，与上面的打码插件及其连接密钥不同。
+本地版本 `1.3.1.2` 补齐 Google 域的 HTTP/HTTPS Cookie 读取权限，避免遗漏非 Secure 登录 Cookie；
+仍通过 HTTPS 访问 Flow，不查询 Google 个人资料。手填邮箱用于稳定更新同一账号，服务端保留官方 Cookie/RPC 验证流程。
+
+插件的离线回归命令为 `node --test tests/token-updater-diagnostic.test.cjs`，不需要安装 Node 依赖。
+测试通过不等于真实会话同步或生成成功，安装及敏感凭据注意事项见插件说明。
+
 ### 方式二：本地部署
 
 ```bash
