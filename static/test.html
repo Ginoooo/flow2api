@@ -1,9 +1,10 @@
 <!DOCTYPE html>
-<html lang="zh-CN">
+<html data-i18n-page="test" lang="zh-CN">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Flow2API 模型测试</title>
+<title data-i18n="Flow2API 模型测试">Flow2API 模型测试</title>
+    <script src="/static/i18n.js"></script>
 <style>
 * { margin: 0; padding: 0; box-sizing: border-box; }
 body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #0f1117; color: #e1e1e6; min-height: 100vh; }
@@ -58,12 +59,13 @@ h1 { text-align: center; margin-bottom: 8px; font-size: 24px; color: #7c8aff; }
 
 .form-group { margin-bottom: 14px; }
 .form-group label { display: block; font-size: 13px; color: #888; margin-bottom: 6px; }
-.form-group textarea {
+.form-group textarea, .form-group input[type="text"] {
   width: 100%; background: #0f1117; border: 1px solid #2a2b3a; color: #e1e1e6;
-  padding: 10px 12px; border-radius: 8px; font-size: 14px; resize: vertical; min-height: 80px;
+  padding: 10px 12px; border-radius: 8px; font-size: 14px;
   font-family: inherit;
 }
-.form-group textarea:focus { outline: none; border-color: #7c8aff; }
+.form-group textarea { resize: vertical; min-height: 80px; }
+.form-group textarea:focus, .form-group input[type="text"]:focus { outline: none; border-color: #7c8aff; }
 
 .image-upload-area {
   border: 2px dashed #2a2b3a; border-radius: 8px; padding: 20px; text-align: center;
@@ -123,44 +125,50 @@ h1 { text-align: center; margin-bottom: 8px; font-size: 24px; color: #7c8aff; }
 </head>
 <body>
 <div class="container">
-  <h1>🧪 Flow2API 模型测试</h1>
-  <p class="subtitle">选择模型，输入提示词，测试生成效果</p>
+  <div style="display:flex;justify-content:flex-end;margin-bottom:12px;"><select data-language-select aria-label="Language" style="padding:6px 10px;border-radius:6px;border:1px solid #2a2b3a;background:#1a1b26;color:#e1e1e6;"><option value="zh-CN">中文</option><option value="en">English</option></select></div>
+  <h1><span data-i18n="🧪 Flow2API 模型测试">🧪 Flow2API 模型测试</span></h1>
+  <p class="subtitle"><span data-i18n="选择模型，输入提示词，测试生成效果">选择模型，输入提示词，测试生成效果</span></p>
 
   <div class="config-bar">
     <label>API Key:</label>
-    <input type="password" id="apiKey" placeholder="输入 API Key">
-    <label>地址:</label>
+    <input type="password" id="apiKey" placeholder="输入 API Key" data-i18n-placeholder="输入 API Key">
+    <label><span data-i18n="地址:">地址:</span></label>
     <input type="text" id="baseUrl" placeholder="http://localhost:8000" />
   </div>
-  <p class="config-note">未填写 API Key 或模型列表加载失败时，会回退到内置候选模型；实际生成前仍需填写有效 API Key。</p>
+  <p class="config-note"><span data-i18n="未填写 API Key 或模型列表加载失败时，会回退到内置候选模型；实际生成前仍需填写有效 API Key。">未填写 API Key 或模型列表加载失败时，会回退到内置候选模型；实际生成前仍需填写有效 API Key。</span></p>
 
   <div class="main-layout">
     <div class="sidebar" id="modelSidebar"></div>
     <div class="content">
       <div class="gen-panel">
-        <h3 id="selectedModelName">请选择模型</h3>
-        <div class="model-info" id="selectedModelInfo">从左侧列表选择一个模型开始测试</div>
+        <h3 id="selectedModelName"><span data-i18n="请选择模型">请选择模型</span></h3>
+        <div class="model-info" id="selectedModelInfo"><span data-i18n="从左侧列表选择一个模型开始测试">从左侧列表选择一个模型开始测试</span></div>
 
         <div class="form-group">
-          <label>提示词 (Prompt)</label>
-          <textarea id="promptInput" placeholder="描述你想生成的内容...">一只可爱的橘猫趴在窗台上晒太阳，窗外是樱花盛开的春天</textarea>
+          <label><span data-i18n="提示词 (Prompt)">提示词 (Prompt)</span></label>
+          <textarea id="promptInput" placeholder="描述你想生成的内容..." data-i18n-placeholder="描述你想生成的内容...">一只可爱的橘猫趴在窗台上晒太阳，窗外是樱花盛开的春天</textarea>
+        </div>
+
+        <div class="form-group" id="videoSourceGroup" style="display:none;">
+          <label for="videoMediaId"><span data-i18n="源视频媒体 ID">源视频媒体 ID</span></label>
+          <input type="text" id="videoMediaId" placeholder="输入源视频的 mediaGenerationId" data-i18n-placeholder="输入源视频的 mediaGenerationId" autocomplete="off">
         </div>
 
         <div class="form-group" id="imageUploadGroup" style="display:none;">
-          <label>上传图片 <span id="imageLimit" style="color:#666;font-size:12px;"></span></label>
+          <label><span data-i18n="上传图片">上传图片</span> <span id="imageLimit" style="color:#666;font-size:12px;"></span></label>
           <div class="image-upload-area" id="imageUploadArea">
-            <div class="image-upload-hint" id="imageHint">点击或拖拽上传图片</div>
+            <div class="image-upload-hint" id="imageHint"><span data-i18n="点击或拖拽上传图片">点击或拖拽上传图片</span></div>
             <div class="image-preview-list" id="imagePreviewList"></div>
           </div>
           <input type="file" id="imageFileInput" accept="image/*" multiple style="display:none;">
         </div>
 
-        <button class="btn-generate" id="btnGenerate" disabled>选择模型后开始生成</button>
+        <button class="btn-generate" id="btnGenerate" disabled><span data-i18n="选择模型后开始生成">选择模型后开始生成</span></button>
       </div>
 
       <div class="output-panel">
-        <h3><span class="status-dot status-idle" id="statusDot"></span> <span id="statusText">等待中</span></h3>
-        <div class="output-log" id="outputLog">准备就绪，选择模型并点击生成按钮开始...</div>
+        <h3><span class="status-dot status-idle" id="statusDot"></span> <span id="statusText"><span data-i18n="等待中">等待中</span></span></h3>
+        <div class="output-log" id="outputLog"><span data-i18n="准备就绪，选择模型并点击生成按钮开始...">准备就绪，选择模型并点击生成按钮开始...</span></div>
         <div class="output-result" id="outputResult"></div>
       </div>
     </div>
@@ -171,15 +179,42 @@ h1 { text-align: center; margin-bottom: 8px; font-size: 24px; color: #7c8aff; }
 const STATE = { selectedModel: null, modelConfig: null, images: [], generating: false };
 </script>
 <script>
+    I18n.ready.then(() => {
+
+// Normalize legacy underscore ids so both catalog styles classify identically.
+function normalizeModelId(modelId) {
+  return String(modelId).toLowerCase().replace(/_/g, "-");
+}
+
+// Model family determines reference inputs independently of output resolution.
+function getModelFamily(modelId) {
+  const norm = normalizeModelId(modelId);
+  if (norm.includes("image")) return "image";
+  if (norm.includes("i2v") || norm.includes("interpolation")) return "i2v";
+  if (norm.includes("r2v")) return "r2v";
+  if (norm.includes("omni") || norm.includes("abra")) return "omni";
+  if (norm.includes("extend")) return "extend";
+  return "t2v";
+}
+
+function classifyModel(modelId) {
+  const family = getModelFamily(modelId);
+  const norm = normalizeModelId(modelId);
+  if (family !== "image" && (norm.includes("4k") || norm.includes("1080p"))) return "upsample";
+  return family;
+}
+
 // Model categories for sidebar
 const MODEL_CATEGORIES = {
-  "Gemini 3.1 Flash 图片": { filter: m => m.startsWith("gemini-3.1-flash-image") },
-  "Nano Banana 2 Lite 图片": { filter: m => m.startsWith("gemini-3.1-flash-lite-image") },
-  "Gemini 3.0 Pro 图片": { filter: m => m.startsWith("gemini-3.0-pro-image") },
-  "Veo 3.1 文生视频 (T2V)": { filter: m => m.startsWith("veo_3_1_t2v") && !m.includes("4k") && !m.includes("1080p") },
-  "Veo 3.1 图生视频 (I2V)": { filter: m => m.startsWith("veo_3_1_i2v") && !m.includes("4k") && !m.includes("1080p") },
-  "Veo 3.1 多图视频 (R2V)": { filter: m => m.startsWith("veo_3_1_r2v") && !m.includes("4k") && !m.includes("1080p") },
-  "视频放大 (Upsample)": { filter: m => !m.includes("image") && (m.includes("4k") || m.includes("1080p")) },
+  "Gemini 3.1 Flash 图片": { filter: m => normalizeModelId(m).startsWith("gemini-3.1-flash-image") },
+  "Nano Banana 2 Lite 图片": { filter: m => normalizeModelId(m).startsWith("gemini-3.1-flash-lite-image") },
+  "Gemini 3.0 Pro 图片": { filter: m => normalizeModelId(m).startsWith("gemini-3.0-pro-image") },
+  "Veo 3.1 文生视频 (T2V)": { filter: m => classifyModel(m) === "t2v" },
+  "Veo 3.1 图生视频 (I2V)": { filter: m => classifyModel(m) === "i2v" },
+  "Veo 3.1 多图视频 (R2V)": { filter: m => classifyModel(m) === "r2v" },
+  "Omni 1.1 Flash 视频": { filter: m => classifyModel(m) === "omni" },
+  "视频续写 (Extend)": { filter: m => classifyModel(m) === "extend" },
+  "视频放大 (Upsample)": { filter: m => classifyModel(m) === "upsample" },
 };
 
 const FALLBACK_MODELS = {
@@ -267,12 +302,17 @@ const FALLBACK_MODELS = {
   "veo_3_1_r2v_fast_landscape_ultra_relaxed_8s": "Video generation - R2V fast ultra relaxed 8s landscape",
   "veo_3_1_r2v_fast_landscape_ultra_4k": "Video upsample alias - generate R2V landscape then upscale to 4K",
   "veo_3_1_r2v_fast_landscape_ultra_1080p": "Video upsample alias - generate R2V landscape then upscale to 1080P",
+  "omni-1.1-flash": "Video generation - Omni 1.1 Flash 8s landscape, optional reference images",
+  "omni-1.1-flash-4s-landscape": "Video generation - Omni 1.1 Flash 4s landscape",
+  "omni-1.1-flash-4s-portrait": "Video generation - Omni 1.1 Flash 4s portrait",
+  "omni-1.1-flash-8s-landscape": "Video generation - Omni 1.1 Flash 8s landscape",
+  "omni-1.1-flash-8s-portrait": "Video generation - Omni 1.1 Flash 8s portrait",
 };
 
 let ALL_MODELS = {};
 
 function applyFallbackModels(reason) {
-  console.warn("使用内置候选模型列表:", reason);
+  console.warn(I18n.t("使用内置候选模型列表:"), reason);
   ALL_MODELS = { ...FALLBACK_MODELS };
   renderSidebar();
 }
@@ -286,7 +326,7 @@ async function loadModels() {
   }
   try {
     const resp = await fetch(`${baseUrl}/v1/models`, {
-      headers: { "Authorization": `Bearer ${apiKey}` }
+      headers: { ...I18n.headers(), "Authorization": `Bearer ${apiKey}` }
     });
     if (!resp.ok) {
       throw new Error(`HTTP ${resp.status}`);
@@ -301,7 +341,7 @@ async function loadModels() {
     items.forEach(m => { ALL_MODELS[m.id] = m.description; });
     renderSidebar();
   } catch (e) {
-    console.error("加载模型失败:", e);
+    console.error(I18n.t("加载模型失败:"), e);
     applyFallbackModels(e.message || "load_failed");
   }
 }
@@ -311,20 +351,21 @@ function renderSidebarFallback() {
 }
 
 function getModelType(modelId) {
-  if (modelId.includes("image")) return "image";
-  return "video";
+  return getModelFamily(modelId) === "image" ? "image" : "video";
 }
 
 function getModelMeta(modelId) {
-  // Determine supports_images, min/max from model name patterns
-  const isI2V = modelId.includes("i2v");
-  const isR2V = modelId.includes("r2v");
-  const isT2V = modelId.includes("t2v");
-  const isImage = getModelType(modelId) === "image";
+  // Determine supports_images, min/max from the model family
+  const family = getModelFamily(modelId);
 
-  if (isImage) return { type: "image", supportsImages: true, minImages: 0, maxImages: 5 };
-  if (isI2V) return { type: "video", supportsImages: true, minImages: 1, maxImages: 2 };
-  if (isR2V) return { type: "video", supportsImages: true, minImages: 0, maxImages: 3 };
+  if (family === "image") return { type: "image", supportsImages: true, minImages: 0, maxImages: 5 };
+  if (family === "i2v") return { type: "video", supportsImages: true, minImages: 1, maxImages: 2 };
+  if (family === "r2v" || family === "omni") {
+    return { type: "video", supportsImages: true, minImages: 0, maxImages: 3 };
+  }
+  if (family === "extend") {
+    return { type: "video", supportsImages: false, minImages: 0, maxImages: 0, requiresVideoSource: true };
+  }
   return { type: "video", supportsImages: false, minImages: 0, maxImages: 0 };
 }
 
@@ -334,7 +375,7 @@ function renderSidebar() {
 
   const modelIds = Object.keys(ALL_MODELS).sort();
   if (modelIds.length === 0) {
-    sidebar.innerHTML = '<div class="model-section"><div class="model-list" style="border-radius:8px;"><div class="model-item" style="cursor:default;color:#888;">未获取到可用模型，请检查 API Key 或稍后重试</div></div></div>';
+    sidebar.innerHTML = "<div class=\"model-section\"><div class=\"model-list\" style=\"border-radius:8px;\"><div class=\"model-item\" style=\"cursor:default;color:#888;\"><span data-i18n=\"未获取到可用模型，请检查 API Key 或稍后重试\">未获取到可用模型，请检查 API Key 或稍后重试</span></div></div></div>";
     return;
   }
 
@@ -347,7 +388,8 @@ function renderSidebar() {
 
     const title = document.createElement("div");
     title.className = "section-title";
-    title.innerHTML = `<span>${catName} (${models.length})</span><span class="arrow">▼</span>`;
+    title.dataset.category = catName;
+    title.innerHTML = `<span>${I18n.t(catName)} (${models.length})</span><span class="arrow">▼</span>`;
 
     const list = document.createElement("div");
     list.className = "model-list";
@@ -356,10 +398,11 @@ function renderSidebar() {
       const item = document.createElement("div");
       item.className = "model-item";
       item.dataset.model = modelId;
+      item.classList.toggle("active", modelId === STATE.selectedModel);
 
       const type = getModelType(modelId);
       const shortName = modelId.replace("gemini-3.1-flash-image-", "").replace("gemini-3.1-flash-lite-image-", "").replace("gemini-3.0-pro-image-", "");
-      item.innerHTML = `<span>${shortName}</span><span class="model-tag ${type === 'image' ? 'tag-image' : 'tag-video'}">${type === 'image' ? '图片' : '视频'}</span>`;
+      item.innerHTML = `<span>${shortName}</span><span class="model-tag ${type === 'image' ? 'tag-image' : 'tag-video'}">${type === 'image' ? I18n.t("图片") : I18n.t("视频")}</span>`;
       item.onclick = () => selectModel(modelId);
       list.appendChild(item);
     });
@@ -386,19 +429,22 @@ function selectModel(modelId) {
   });
 
   // Update panel
-  document.getElementById("selectedModelName").textContent = modelId;
-  document.getElementById("selectedModelInfo").textContent = ALL_MODELS[modelId] || "";
+  I18n.setRawText(document.getElementById("selectedModelName"), modelId);
+  I18n.setMessage(document.getElementById("selectedModelInfo"), ALL_MODELS[modelId] || "");
 
   // Show/hide image upload
   const uploadGroup = document.getElementById("imageUploadGroup");
   const meta = STATE.modelConfig;
   if (meta.supportsImages) {
     uploadGroup.style.display = "block";
-    const limitText = meta.type === "image" ? "可选，用于图生图" : `${meta.minImages}-${meta.maxImages}张`;
-    document.getElementById("imageLimit").textContent = `(${limitText})`;
+    const limitText = meta.type === "image" ? I18n.t("可选，用于图生图") : I18n.t("{0}-{1}张", {"0": (meta.minImages), "1": (meta.maxImages)});
+    I18n.setRawText(document.getElementById("imageLimit"), `(${limitText})`);
   } else {
     uploadGroup.style.display = "none";
   }
+
+  document.getElementById("videoSourceGroup").style.display = meta.requiresVideoSource ? "block" : "none";
+  document.getElementById("videoMediaId").value = "";
 
   // Reset image previews
   document.getElementById("imagePreviewList").innerHTML = "";
@@ -407,7 +453,7 @@ function selectModel(modelId) {
   // Enable button
   const btn = document.getElementById("btnGenerate");
   btn.disabled = false;
-  btn.textContent = meta.type === "image" ? "🎨 生成图片" : "🎬 生成视频";
+  I18n.setMessage(btn, meta.type === "image" ? I18n.t("🎨 生成图片") : I18n.t("🎬 生成视频"));
 }
 
 // Image upload handling
@@ -472,19 +518,25 @@ async function generate() {
   const baseUrl = (document.getElementById("baseUrl").value || "").trim();
   const apiKey = (document.getElementById("apiKey").value || "").trim();
   const prompt = document.getElementById("promptInput").value.trim();
-  if (!prompt) { alert("请输入提示词"); return; }
-  if (!apiKey) { alert("请输入 API Key"); return; }
-  if (!baseUrl) { alert("请输入服务地址"); return; }
+  if (!prompt) { alert(I18n.t("请输入提示词")); return; }
+  if (!apiKey) { alert(I18n.t("请输入 API Key")); return; }
+  if (!baseUrl) { alert(I18n.t("请输入服务地址")); return; }
+  const videoMediaId = STATE.modelConfig.requiresVideoSource
+    ? document.getElementById("videoMediaId").value.trim() : "";
+  if (STATE.modelConfig.requiresVideoSource && !videoMediaId) {
+    alert(I18n.t("请输入源视频的 mediaGenerationId"));
+    return;
+  }
 
   STATE.generating = true;
   const btn = document.getElementById("btnGenerate");
   btn.disabled = true;
-  btn.textContent = "⏳ 生成中...";
+  I18n.setMessage(btn, I18n.t("⏳ 生成中..."));
 
   const dot = document.getElementById("statusDot");
   dot.className = "status-dot status-running";
-  document.getElementById("statusText").textContent = "生成中...";
-  document.getElementById("outputLog").textContent = "";
+  I18n.setMessage(document.getElementById("statusText"), I18n.t("生成中..."));
+  I18n.setRawText(document.getElementById("outputLog"), "");
   document.getElementById("outputResult").innerHTML = "";
 
   const log = document.getElementById("outputLog");
@@ -496,20 +548,23 @@ async function generate() {
   STATE.images.forEach(dataUrl => {
     content.push({ type: "image_url", image_url: { url: dataUrl } });
   });
+  if (videoMediaId) {
+    content.push({ type: "image_url", image_url: { url: `extend://${videoMediaId}` } });
+  }
 
   const messages = [{ role: "user", content: content.length === 1 ? prompt : content }];
 
   const body = { model: STATE.selectedModel, messages, stream: true };
 
   const startTime = Date.now();
-  appendLog(`[${new Date().toLocaleTimeString()}] 模型: ${STATE.selectedModel}\n`);
-  appendLog(`[${new Date().toLocaleTimeString()}] 提示词: ${prompt.substring(0, 100)}${prompt.length > 100 ? '...' : ''}\n`);
-  appendLog(`[${new Date().toLocaleTimeString()}] 开始请求...\n`);
+  appendLog(I18n.t("[{0}] 模型: {1}\n", {"0": (new Date().toLocaleTimeString(I18n.locale)), "1": (STATE.selectedModel)}));
+  appendLog(I18n.t("[{0}] 提示词: {1}{2}\n", {"0": (new Date().toLocaleTimeString(I18n.locale)), "1": (prompt.substring(0, 100)), "2": (prompt.length > 100 ? '...' : '')}));
+  appendLog(I18n.t("[{0}] 开始请求...\n", {"0": (new Date().toLocaleTimeString(I18n.locale))}));
 
   try {
     const resp = await fetch(`${baseUrl}/v1/chat/completions`, {
       method: "POST",
-      headers: { "Authorization": `Bearer ${apiKey}`, "Content-Type": "application/json" },
+      headers: { ...I18n.headers(), "Authorization": `Bearer ${apiKey}`, "Content-Type": "application/json" },
       body: JSON.stringify(body),
     });
 
@@ -539,13 +594,14 @@ async function generate() {
         try {
           const parsed = JSON.parse(data);
           if (parsed.error) {
-            appendLog(`\n❌ 错误: ${JSON.stringify(parsed.error)}\n`);
+            appendLog(I18n.t("\n❌ 错误: {0}\n", {"0": (JSON.stringify(parsed.error))}));
             continue;
           }
           const choices = parsed.choices || [];
           if (choices.length > 0) {
             const delta = choices[0].delta || {};
-            const content = delta.reasoning_content || delta.content || "";
+            if (delta.reasoning_content) appendLog(I18n.translateMessage(delta.reasoning_content));
+            const content = delta.content || "";
             if (content) {
               fullContent += content;
               appendLog(content);
@@ -558,22 +614,22 @@ async function generate() {
     }
 
     const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
-    appendLog(`\n\n[${new Date().toLocaleTimeString()}] 完成，耗时 ${elapsed}s\n`);
+    appendLog(I18n.t("\n\n[{0}] 完成，耗时 {1}s\n", {"0": (new Date().toLocaleTimeString(I18n.locale)), "1": (elapsed)}));
 
     // Render result
     renderResult(fullContent);
     dot.className = "status-dot status-done";
-    document.getElementById("statusText").textContent = `完成 (${elapsed}s)`;
+    I18n.setMessage(document.getElementById("statusText"), I18n.t("完成 ({0}s)", {"0": (elapsed)}));
 
   } catch (e) {
-    appendLog(`\n❌ 请求失败: ${e.message}\n`);
+    appendLog(I18n.t("\n❌ 请求失败: {0}\n", {"0": (e.message)}));
     dot.className = "status-dot status-error";
-    document.getElementById("statusText").textContent = "失败";
+    I18n.setMessage(document.getElementById("statusText"), I18n.t("失败"));
   } finally {
     STATE.generating = false;
     btn.disabled = false;
     const meta = STATE.modelConfig;
-    btn.textContent = meta && meta.type === "image" ? "🎨 生成图片" : "🎬 生成视频";
+    I18n.setMessage(btn, meta && meta.type === "image" ? I18n.t("🎨 生成图片") : I18n.t("🎬 生成视频"));
   }
 }
 
@@ -587,7 +643,7 @@ function renderResult(content) {
   while ((match = imgRegex.exec(content)) !== null) {
     const img = document.createElement("img");
     img.src = match[1];
-    img.alt = "生成结果";
+    img.alt = I18n.t("生成结果");
     img.loading = "lazy";
     resultDiv.appendChild(img);
   }
@@ -607,7 +663,7 @@ function renderResult(content) {
   if (resultDiv.children.length === 0 && content.trim()) {
     const pre = document.createElement("pre");
     pre.style.cssText = "color:#aaa;font-size:13px;white-space:pre-wrap;word-break:break-all;";
-    pre.textContent = content;
+    I18n.setRawText(pre, content);
     resultDiv.appendChild(pre);
   }
 }
@@ -621,6 +677,28 @@ function renderResult(content) {
   apiKeyInput.addEventListener("change", loadModels);
   loadModels();
 })();
-</script>
+
+
+window.addEventListener('languagechange', () => {
+  const collapsed = new Set(Array.from(document.querySelectorAll('.section-title.collapsed'), title => title.dataset.category));
+  renderSidebar();
+  document.querySelectorAll('.section-title').forEach(title => {
+    if (collapsed.has(title.dataset.category)) {
+      title.classList.add('collapsed');
+      title.nextElementSibling.classList.add('hidden');
+    }
+  });
+  if (!STATE.selectedModel) return;
+  const meta = STATE.modelConfig;
+  I18n.setMessage(document.getElementById('selectedModelInfo'), ALL_MODELS[STATE.selectedModel] || '');
+  if (meta.supportsImages) {
+    const limitText = meta.type === 'image' ? I18n.t('可选，用于图生图') : I18n.t('{0}-{1}张', {0: meta.minImages, 1: meta.maxImages});
+    I18n.setRawText(document.getElementById('imageLimit'), `(${limitText})`);
+  }
+  I18n.setMessage(document.getElementById('btnGenerate'), STATE.generating ? I18n.t('⏳ 生成中...') : I18n.t(meta.type === 'image' ? '🎨 生成图片' : '🎬 生成视频'));
+});
+        Object.assign(window, {applyFallbackModels, loadModels, renderSidebarFallback, getModelType, getModelMeta, renderSidebar, selectModel, handleFiles, renderImagePreviews, removeImage, generate, renderResult});
+    });
+    </script>
 </body>
 </html>

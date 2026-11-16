@@ -22,7 +22,13 @@ from ..core.database import Database
 from ..core.config import (
     config,
     get_yescaptcha_min_score,
+    normalize_captcha_method,
     normalize_yescaptcha_task_type,
+    is_yes_style_captcha_method,
+    FLOW2API_TEAM_CAPTCHA_BASE_URL,
+    FLOW2API_TEAM_CAPTCHA_CLIENT_KEY,
+    FLOW2API_TEAM_CAPTCHA_METHOD,
+    FLOW2API_TEAM_CAPTCHA_TASK_TYPE,
 )
 from ..core.models import Token
 from ..core.browser_runtime_status import (
@@ -59,8 +65,27 @@ captcha_runtime_prepare_tasks: Dict[str, asyncio.Task] = {}
 # Store active admin session tokens (in production, use Redis or database)
 active_admin_tokens = set()
 ADMIN_SESSION_COOKIE_NAME = "admin_session"
+# 历史版本曾把「账号邮箱与 Cookie 不匹配」当作失败原因写进 last_st_refresh_result。
+# 现在邮箱一律以 Flow 页面为准自动更正，这类旧记录不再回显给前端。
+_LEGACY_IDENTITY_ERROR_MARKERS = (
+    "登录账号与当前 Token",
+    "请同步对应账号的",
+)
+
+
+def _sanitize_refresh_result(text: Any) -> str:
+    """旧版本的邮箱不匹配报错直接丢弃，不再回显给前端。"""
+    value = str(text or "").strip()
+    if not value:
+        return ""
+    if any(marker in value for marker in _LEGACY_IDENTITY_ERROR_MARKERS):
+        return ""
+    return value
+
+
 SUPPORTED_API_CAPTCHA_METHODS = {
     "yescaptcha",
+    FLOW2API_TEAM_CAPTCHA_METHOD,
     "captcharun",
     "twocaptcha",
     "capmonster",
@@ -445,7 +470,13 @@ async def _solve_recaptcha_with_api_service(
     enterprise: bool = False,
 ) -> Optional[str]:
     """使用当前配置的第三方打码服务获取 token。"""
-    if method == "yescaptcha":
+    if method == FLOW2API_TEAM_CAPTCHA_METHOD:
+        # Flow2API 团队打码：内置服务，地址与密钥固定。
+        client_key = FLOW2API_TEAM_CAPTCHA_CLIENT_KEY
+        base_url = FLOW2API_TEAM_CAPTCHA_BASE_URL
+        task_type = FLOW2API_TEAM_CAPTCHA_TASK_TYPE
+        min_score = get_yescaptcha_min_score(task_type)
+    elif method == "yescaptcha":
         client_key = config.yescaptcha_api_key
         base_url = config.yescaptcha_base_url
         task_type = config.yescaptcha_task_type
@@ -559,7 +590,7 @@ async def _solve_recaptcha_with_api_service(
         pass
 
     create_payload = {"clientKey": client_key, "task": task}
-    if method == "yescaptcha":
+    if is_yes_style_captcha_method(method):
         create_payload["softID"] = "33424"
 
     async with AsyncSession() as session:
@@ -690,16 +721,21 @@ class AddTokenRequest(BaseModel):
     video_concurrency: int = -1
     protocol_mode: Literal["protocol"] = "protocol"
     google_cookies: str = Field(min_length=1, max_length=524288)
-    login_account: str = Field(min_length=3, max_length=254)
+    # 可选：留空时由 Cookie/会话自动识别，识别失败则使用占位邮箱
+    login_account: Optional[str] = Field(default=None, max_length=254)
     login_password: Optional[str] = None
     proxy_url: Optional[str] = None
     auto_refresh_enabled: bool = True
-    refresh_interval_minutes: int = 120
+    refresh_interval_minutes: int = Field(default=30, ge=1, le=10080)
 
     @field_validator("login_account")
     @classmethod
-    def validate_login_account(cls, value: str) -> str:
+    def validate_login_account(cls, value: Optional[str]) -> Optional[str]:
+        if value is None:
+            return None
         normalized = value.strip().lower()
+        if not normalized:
+            return None
         if not re.fullmatch(r"[^\s@]+@[^\s@]+\.[^\s@]+", normalized):
             raise ValueError("login_account must be a valid email address")
         return normalized
@@ -809,7 +845,7 @@ class ImportTokenItem(BaseModel):
 
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
 
-    login_account: str = Field(min_length=3, max_length=254)
+    login_account: Optional[str] = Field(default=None, max_length=254)
     google_cookies: str = Field(min_length=1, max_length=524288)
     remark: Optional[str] = Field(default=None, max_length=512)
     project_id: Optional[str] = Field(default=None, max_length=255)
@@ -824,12 +860,16 @@ class ImportTokenItem(BaseModel):
     protocol_mode: Literal["protocol"] = "protocol"
     proxy_url: Optional[str] = Field(default=None, max_length=4096)
     auto_refresh_enabled: bool = True
-    refresh_interval_minutes: int = Field(default=120, ge=1, le=10080)
+    refresh_interval_minutes: int = Field(default=30, ge=1, le=10080)
 
     @field_validator("login_account")
     @classmethod
-    def validate_login_account(cls, value: str) -> str:
+    def validate_login_account(cls, value: Optional[str]) -> Optional[str]:
+        if value is None:
+            return None
         normalized = value.strip().lower()
+        if not normalized:
+            return None
         if not re.fullmatch(r"[^\s@]+@[^\s@]+\.[^\s@]+", normalized):
             raise ValueError("login_account must be a valid email address")
         return normalized
@@ -842,7 +882,9 @@ class ImportTokensRequest(BaseModel):
 
     @model_validator(mode="after")
     def validate_unique_accounts(self):
-        identities = [item.login_account for item in self.tokens]
+        identities = [
+            item.login_account for item in self.tokens if item.login_account
+        ]
         if len(identities) != len(set(identities)):
             raise ValueError("duplicate login_account entries are not allowed")
         return self
@@ -850,7 +892,9 @@ class ImportTokensRequest(BaseModel):
 
 class TokenRefreshConfigRequest(BaseModel):
     enabled: Optional[bool] = None
-    refresh_interval_minutes: Optional[int] = None
+    refresh_interval_minutes: Optional[int] = Field(default=None, ge=1, le=10080)
+    # 同步改写全部账号的刷新间隔，避免旧账号继续沿用历史默认值
+    apply_to_tokens: bool = False
 
 
 class PluginTokenUpdateRequest(BaseModel):
@@ -859,6 +903,7 @@ class PluginTokenUpdateRequest(BaseModel):
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
 
     google_cookies: str = Field(min_length=1, max_length=524288)
+    # 邮箱由 Token Updater 显式提供，用于稳定更新同一 Flow 账号。
     login_account: str = Field(min_length=3, max_length=254)
     protocol_mode: Literal["protocol"] = "protocol"
 
@@ -866,6 +911,8 @@ class PluginTokenUpdateRequest(BaseModel):
     @classmethod
     def validate_login_account(cls, value: str) -> str:
         normalized = value.strip().lower()
+        if not normalized:
+            raise ValueError("login_account must be a valid email address")
         if not re.fullmatch(r"[^\s@]+@[^\s@]+\.[^\s@]+", normalized):
             raise ValueError("login_account must be a valid email address")
         return normalized
@@ -1035,11 +1082,13 @@ async def get_tokens(token: str = Depends(verify_admin_token)):
         "login_password": row.get("login_password") or "",
         "proxy_url": row.get("proxy_url") or "",
         "auto_refresh_enabled": bool(row.get("auto_refresh_enabled", True)),
-        "refresh_interval_minutes": row.get("refresh_interval_minutes") or 120,
+        "refresh_interval_minutes": row.get("refresh_interval_minutes") or 30,
             "last_st_refresh_at": to_iso(row.get("last_st_refresh_at"))
             if row.get("last_st_refresh_at")
             else None,
-        "last_st_refresh_result": row.get("last_st_refresh_result") or "",
+        "last_st_refresh_result": _sanitize_refresh_result(
+            row.get("last_st_refresh_result")
+        ),
         "image_enabled": bool(row.get("image_enabled")),
         "video_enabled": bool(row.get("video_enabled")),
         "image_concurrency": row.get("image_concurrency"),
@@ -1169,6 +1218,10 @@ async def update_token(
             auto_refresh_enabled=request.auto_refresh_enabled,
             refresh_interval_minutes=request.refresh_interval_minutes,
         )
+        if request.google_cookies:
+            await token_manager.mark_cookie_validated(
+                token_id, request.login_account
+            )
 
         # 热更新并发限制，确保管理台修改立即生效
         if concurrency_manager:
@@ -1260,7 +1313,7 @@ async def refresh_at(token_id: int, token: str = Depends(verify_admin_token)):
             debug_logger.log_error(f"[API] AT 刷新失败: token_id={token_id}")
             
             snapshot = await token_manager.get_token(token_id)
-            error_detail = (
+            error_detail = _sanitize_refresh_result(
                 snapshot.last_st_refresh_result if snapshot else None
             ) or "Cookie 刷新失败，请重新同步完整的 Google Cookies"
             
@@ -1314,7 +1367,16 @@ async def import_tokens(
     for idx, item in enumerate(request.tokens):
         try:
             google_cookies = item.google_cookies
-            email = item.login_account
+            email = str(item.login_account or "").strip().lower()
+            detected_email = ""
+            if not email:
+                # 未提供账号时，从 Cookie 读取 Flow 登录邮箱并保存最新登录态。
+                identity = await token_manager.detect_account_identity(
+                    google_cookies, proxy_url=item.proxy_url
+                )
+                google_cookies = identity["google_cookies"]
+                email = identity["email"].strip().lower()
+                detected_email = email
             cookie_hash = hashlib.sha256(google_cookies.encode("utf-8")).hexdigest()
             st = f"frontend-{cookie_hash[:32]}"
 
@@ -1378,6 +1440,7 @@ async def import_tokens(
                             image_concurrency=item.image_concurrency,
                             video_concurrency=item.video_concurrency,
                         )
+                    await token_manager.mark_cookie_validated(existing.id, email)
                     existing.is_active = should_enable
                     existing.email = email
                     existing.login_account = email
@@ -1416,11 +1479,12 @@ async def import_tokens(
                             image_concurrency=item.image_concurrency,
                             video_concurrency=item.video_concurrency,
                         )
+                    await token_manager.mark_cookie_validated(new_token.id, email)
                     existing_by_email[email.lower()] = new_token
                     added += 1
 
             except Exception as e:
-                errors.append(f"第{idx + 1}项 ({email}): {str(e)}")
+                errors.append(f"第{idx + 1}项 ({email or detected_email}): {str(e)}")
 
         except Exception as e:
             errors.append(f"第{idx + 1}项: {str(e)}")
@@ -1881,8 +1945,14 @@ async def update_token_refresh_config(
         enabled=request.enabled,
         refresh_interval_minutes=request.refresh_interval_minutes,
     )
+    applied = 0
+    if request.apply_to_tokens and request.refresh_interval_minutes is not None:
+        applied = await db.update_all_tokens_refresh_interval(
+            request.refresh_interval_minutes
+        )
     return {
         "success": True,
+        "applied_to_tokens": applied,
         "config": {
             "at_auto_refresh_enabled": True,
             "protocol_refresh_enabled": refresh_config.enabled,
@@ -1985,7 +2055,7 @@ async def update_captcha_config(
     request: dict, token: str = Depends(verify_admin_token)
 ):
     """Update captcha configuration"""
-    captcha_method = request.get("captcha_method")
+    captcha_method = normalize_captcha_method(request.get("captcha_method"))
     if captcha_method == "extension_ws" and not config.extension_auth_key:
         raise HTTPException(status_code=400, detail="Configure a browser solver key first")
     yescaptcha_api_key = request.get("yescaptcha_api_key")
@@ -2145,6 +2215,9 @@ async def get_captcha_config(token: str = Depends(verify_admin_token)):
     return {
         "captcha_method": captcha_config.captcha_method,
         "extension_key_configured": bool(captcha_config.extension_auth_key),
+        "flow2api_team_base_url": FLOW2API_TEAM_CAPTCHA_BASE_URL,
+        "flow2api_team_client_key": _mask_token(FLOW2API_TEAM_CAPTCHA_CLIENT_KEY),
+        "flow2api_team_task_type": FLOW2API_TEAM_CAPTCHA_TASK_TYPE,
         "yescaptcha_api_key": captcha_config.yescaptcha_api_key,
         "yescaptcha_base_url": captcha_config.yescaptcha_base_url,
         "yescaptcha_task_type": captcha_config.yescaptcha_task_type,
@@ -2838,13 +2911,14 @@ async def plugin_update_token(
     plugin_config = await db.get_plugin_config()
 
     google_cookies = request.google_cookies
-    email = request.login_account
+    email = request.login_account.strip().lower()
 
     try:
         result = await token_manager.flow_client.st_to_at(
             "",
             google_cookies=google_cookies,
         )
+        google_cookies = result.get("google_cookies") or google_cookies
         at = result["access_token"]
         expires = result.get("expires")
         at_expires = None
@@ -2862,7 +2936,7 @@ async def plugin_update_token(
     cookie_hash = hashlib.sha256(google_cookies.encode("utf-8")).hexdigest()[:32]
     session_token = f"frontend-{cookie_hash}"
 
-    # Step 2: Check if token with this email exists
+    # Step 2: 按插件显式提供的邮箱定位已有账号，避免 Cookie 会话误绑定账号。
     existing_token = await db.get_token_by_email(email)
 
     if existing_token:
@@ -2878,7 +2952,9 @@ async def plugin_update_token(
                 protocol_mode=request.protocol_mode,
                 google_cookies=google_cookies,
                 login_account=email,
+                auto_enable_on_update=plugin_config.auto_enable_on_update,
             )
+            await token_manager.mark_cookie_validated(existing_token.id, email)
 
             # Check if auto-enable is enabled and token is disabled
             if plugin_config.auto_enable_on_update and not existing_token.is_active:
@@ -2909,7 +2985,7 @@ async def plugin_update_token(
                 google_cookies=google_cookies,
                 login_account=email,
                 auto_refresh_enabled=True,
-                refresh_interval_minutes=120,
+                refresh_interval_minutes=30,
             )
 
             return {
@@ -2967,13 +3043,15 @@ async def plugin_check_tokens(
                 else row.get("last_used_at"),
             "protocol_mode": row.get("protocol_mode") or "session",
             "auto_refresh_enabled": bool(row.get("auto_refresh_enabled", True)),
-            "refresh_interval_minutes": row.get("refresh_interval_minutes") or 120,
+            "refresh_interval_minutes": row.get("refresh_interval_minutes") or 30,
             "last_st_refresh_at": (
                 row.get("last_st_refresh_at").isoformat()
                 if hasattr(row.get("last_st_refresh_at"), "isoformat")
                 else row.get("last_st_refresh_at")
             ),
-            "last_st_refresh_result": row.get("last_st_refresh_result") or "",
+            "last_st_refresh_result": _sanitize_refresh_result(
+                row.get("last_st_refresh_result")
+            ),
             "credits": row.get("credits", 0),
             }
         )

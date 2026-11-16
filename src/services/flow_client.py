@@ -14,16 +14,42 @@ from typing import Dict, Any, Optional, List, Union, Callable, Awaitable
 from urllib.parse import quote, urljoin, urlparse
 import urllib.error
 import urllib.request
+from http.cookiejar import CookieJar
+from curl_cffi import CurlInfo, CurlOpt
 from curl_cffi.requests import AsyncSession
 from ..core.logger import debug_logger
-from ..core.config import config, get_yescaptcha_min_score
+from ..core.config import (
+    config,
+    get_yescaptcha_min_score,
+    FLOW2API_TEAM_CAPTCHA_BASE_URL,
+    FLOW2API_TEAM_CAPTCHA_CLIENT_KEY,
+    FLOW2API_TEAM_CAPTCHA_METHOD,
+    FLOW2API_TEAM_CAPTCHA_TASK_TYPE,
+    is_yes_style_captcha_method,
+)
 from .flow_current import CurrentFlowClientMixin
 from .flow_frontend import FlowFrontendMixin
+from .flow_cookies import FlowCookieJar
 
 try:
     import httpx
 except ImportError:
     httpx = None
+
+
+def _safe_updated_flow_cookies(owner, original) -> str:
+    """读取 Cookie 最新快照，缺失实现时安全降级。
+
+    历史报错：'FlowClient' object has no attribute 'get_updated_flow_cookies'
+    成因是自定义 flow_frontend 覆盖了上游新增的 Cookie 作用域方法。
+    """
+    getter = getattr(owner, "get_updated_flow_cookies", None)
+    if getter is None:
+        return str(original or "").strip()
+    try:
+        return getter(original)
+    except Exception:
+        return str(original or "").strip()
 
 
 class _FlowClientBase(FlowFrontendMixin):
@@ -675,6 +701,7 @@ class _FlowClientBase(FlowFrontendMixin):
         return_error_response: bool = False,
         redact_sensitive_logs: bool = False,
         impersonate: str = "chrome",
+        cookie_jar: Optional[CookieJar] = None,
     ) -> str:
         """执行原始文本请求（如 SSE），返回响应文本。"""
         fingerprint = self._request_fingerprint_ctx.get()
@@ -797,6 +824,14 @@ class _FlowClientBase(FlowFrontendMixin):
         ):
             headers["sec-ch-ua-mobile"] = inferred_fingerprint["sec_ch_ua_mobile"]
 
+        if cookie_jar is not None:
+            # The scoped jar is authoritative, including cookies deleted on retry.
+            headers.pop("Cookie", None)
+        if isinstance(cookie_jar, FlowCookieJar):
+            cookie_jar.add_runtime_cookies(
+                (fingerprint or {}).get("session_cookies"), url
+            )
+
         request_body_for_log = (
             "<redacted>"
             if redact_sensitive_logs
@@ -819,7 +854,17 @@ class _FlowClientBase(FlowFrontendMixin):
         start_time = time.time()
 
         try:
-            async with AsyncSession(trust_env=False) as session:
+            session_kwargs: Dict[str, Any] = {"trust_env": False}
+            if cookie_jar is not None:
+                session_kwargs.update(
+                    cookies=cookie_jar, curl_infos=[CurlInfo.COOKIELIST]
+                )
+            if isinstance(cookie_jar, FlowCookieJar):
+                extra = cookie_jar.extra_cookie_header(url)
+                session_kwargs.update(
+                    curl_options={CurlOpt.COOKIE: extra}, allow_redirects=not bool(extra)
+                )
+            async with AsyncSession(**session_kwargs) as session:
                 if method.upper() == "GET":
                     response = await session.get(
                         url,
@@ -840,6 +885,12 @@ class _FlowClientBase(FlowFrontendMixin):
                     else:
                         request_kwargs["json"] = json_data
                     response = await session.post(url, **request_kwargs)
+
+                if cookie_jar is not None:
+                    # 兼容自定义/旧版 flow_frontend：缺少该方法时跳过快照回写
+                    updater = getattr(self, "_update_flow_cookie_jar", None)
+                    if updater is not None:
+                        updater(cookie_jar, response)
 
                 duration_ms = (time.time() - start_time) * 1000
                 response_text = response.text
@@ -3141,8 +3192,8 @@ class _FlowClientBase(FlowFrontendMixin):
         prompt: str,
         aspect_ratio: str,
         reference_media_ids: List[str],
-        model_usage_key: str = "abra_r2v_10s",
-        model_display_name: str = "Omni Flash",
+        model_usage_key: str = "macaron_cookie_r2v_10s",
+        model_display_name: str = "Omni 1.2 Flash",
         duration: int = 10,
         user_paygate_tier: str = "PAYGATE_TIER_ONE",
         token_id: Optional[int] = None,
@@ -4584,12 +4635,39 @@ class _FlowClientBase(FlowFrontendMixin):
             log_prefix=log_prefix,
         )
 
+    async def _build_team_captcha_cookie_map(
+        self, token_id: Optional[int]
+    ) -> Dict[str, str]:
+        """团队打码下发的 Cookie 键值对（按 flow.google.com 请求口径选取）。"""
+        try:
+            cookie_storage = await self._resolve_flow_frontend_cookie_storage(
+                token_id=token_id
+            )
+            cookie_storage = _safe_updated_flow_cookies(self, cookie_storage)
+        except Exception as e:
+            debug_logger.log_warning(
+                f"[reCAPTCHA {FLOW2API_TEAM_CAPTCHA_METHOD}] 读取账号 Cookie 失败: {e}"
+            )
+            return {}
+        if not str(cookie_storage or "").strip():
+            return {}
+        from .browser_cookie_utils import cookie_pairs_for_url
+
+        cookie_map: Dict[str, str] = {}
+        for name, value in cookie_pairs_for_url(cookie_storage):
+            if name:
+                cookie_map[name] = value
+        return cookie_map
+
     def _resolve_third_party_captcha_method(self) -> Optional[str]:
         """返回第一个已配置密钥的第三方打码方式（yescaptcha 优先）。
 
         SPrCad 等 batchexecute RPC 只接受第三方打码 token；
         browser/personal harvest 出的 token 会被 UNUSUAL_ACTIVITY 拒绝。
         """
+        if config.captcha_method == FLOW2API_TEAM_CAPTCHA_METHOD:
+            # 内置团队打码始终可用（地址/密钥写死），优先作为第三方 token 来源。
+            return FLOW2API_TEAM_CAPTCHA_METHOD
         for method, attr in (
             ("yescaptcha", "yescaptcha_api_key"),
             ("capmonster", "capmonster_api_key"),
@@ -4631,6 +4709,9 @@ class _FlowClientBase(FlowFrontendMixin):
         if "model_access_denied" in error_lower:
             # 账号无对应模型权限，重试不会改变结果
             return None
+        if "public_error_user_quota_reached" in error_lower:
+            # 账号额度不足，同号重试只会白白消耗打码；交给上层换号
+            return None
         if "403" in error_lower:
             return "403错误"
         if "429" in error_lower or "too many requests" in error_lower:
@@ -4670,6 +4751,9 @@ class _FlowClientBase(FlowFrontendMixin):
             return 2
         if "recaptcha" in error_lower:
             return 2
+        if "public_error_unusual_activity" in error_lower:
+            # 风控拒绝后立刻重试几乎必然再次被拒，留出打码服务自愈时间
+            return 3
         return 1
 
     def _resolve_recaptcha_runtime_settings(
@@ -4682,7 +4766,11 @@ class _FlowClientBase(FlowFrontendMixin):
         )
         website_key = "6LdsFiUsAAAAAIjVDZcuLhaHiDn5nnHVXVRQGeMV"
 
-        if method == "yescaptcha":
+        if method == "flow2api_team":
+            page_action = normalized_action
+            task_type = FLOW2API_TEAM_CAPTCHA_TASK_TYPE
+            min_score = get_yescaptcha_min_score(task_type)
+        elif method == "yescaptcha":
             page_action = normalized_action
             task_type = config.yescaptcha_task_type
             min_score = get_yescaptcha_min_score(task_type)
@@ -5364,6 +5452,7 @@ class _FlowClientBase(FlowFrontendMixin):
         # API打码服务
         elif captcha_method in [
             "yescaptcha",
+            "flow2api_team",
             "captcharun",
             "twocaptcha",
             "capmonster",
@@ -5418,6 +5507,7 @@ class _FlowClientBase(FlowFrontendMixin):
                 proxy_url=proxy_url,
                 user_agent=api_captcha_ua,
                 website_url=captcha_website_url,
+                token_id=token_id,
             )
             if api_result is None:
                 return None, None
@@ -5449,6 +5539,7 @@ class _FlowClientBase(FlowFrontendMixin):
         proxy_url: Optional[str] = None,
         user_agent: Optional[str] = None,
         website_url: Optional[str] = None,
+        token_id: Optional[int] = None,
     ) -> Optional[tuple[str, str]]:
         """通用API打码服务
 
@@ -5465,7 +5556,11 @@ class _FlowClientBase(FlowFrontendMixin):
             避免 reCAPTCHA V3 评估因 UA 不一致判定 UNUSUAL_ACTIVITY。
         """
         # 获取配置
-        if method == "yescaptcha":
+        if method == "flow2api_team":
+            # 内置团队打码：地址与密钥写死，不接受配置覆盖。
+            client_key = FLOW2API_TEAM_CAPTCHA_CLIENT_KEY
+            base_url = FLOW2API_TEAM_CAPTCHA_BASE_URL
+        elif method == "yescaptcha":
             client_key = config.yescaptcha_api_key
             base_url = config.yescaptcha_base_url
         elif method == "capmonster":
@@ -5612,18 +5707,28 @@ class _FlowClientBase(FlowFrontendMixin):
                         "pageAction": page_action,
                     },
                 }
-                if method == "yescaptcha":
+                if is_yes_style_captcha_method(method):
                     create_data["softID"] = "33424"
                 if effective_user_agent:
                     create_data["task"]["userAgent"] = effective_user_agent
                 if min_score is not None:
                     create_data["task"]["minScore"] = min_score
+                if method == FLOW2API_TEAM_CAPTCHA_METHOD:
+                    # 团队打码额外支持把账号 Cookie 与出口代理一起下发，
+                    # 打码侧用同一登录态 + 同一出口 IP 取 token，分数更稳。
+                    team_cookie_map = await self._build_team_captcha_cookie_map(
+                        token_id
+                    )
+                    if team_cookie_map:
+                        create_data["task"]["cookie"] = team_cookie_map
+                    if resolved_proxy_url:
+                        create_data["task"]["proxy"] = resolved_proxy_url
 
                 task_id = None
                 last_create_error = None
                 max_create_attempts = (
                     len(self.YESCAPTCHA_SLOT_BACKOFF_SECONDS)
-                    if method == "yescaptcha"
+                    if is_yes_style_captcha_method(method)
                     else 1
                 )
                 for create_attempt in range(max_create_attempts):
@@ -5658,7 +5763,7 @@ class _FlowClientBase(FlowFrontendMixin):
                     error_code = str(result_json.get("errorCode") or "").strip()
                     error_desc = result_json.get("errorDescription", "Unknown error")
                     last_create_error = result_json
-                    if method == "yescaptcha" and error_code in {
+                    if is_yes_style_captcha_method(method) and error_code in {
                         "ERROR_NO_SLOT_AVAILABLE",
                         "ERROR_NO_SLOT_AVAILABLE_BLOCK",
                     }:

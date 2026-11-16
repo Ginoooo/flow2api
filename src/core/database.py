@@ -382,6 +382,15 @@ class Database:
                 ),
             )
 
+        # 清理历史版本的邮箱不匹配报错记录（现在邮箱按 Flow 页面自动更正）
+        try:
+            await db.execute(
+                "UPDATE tokens SET last_st_refresh_result = '' "
+                "WHERE last_st_refresh_result LIKE '%登录账号与当前%'"
+            )
+        except Exception:
+            pass
+
         # Ensure plugin_config has a row
         cursor = await db.execute("SELECT COUNT(*) FROM plugin_config")
         count = await cursor.fetchone()
@@ -397,7 +406,7 @@ class Database:
         if count[0] == 0:
             await db.execute("""
                 INSERT INTO token_refresh_config (id, enabled, refresh_interval_minutes)
-                VALUES (1, 1, 120)
+                VALUES (1, 1, 30)
             """)
 
     async def check_and_migrate_db(self, config_dict: dict = None):
@@ -518,7 +527,7 @@ class Database:
                     CREATE TABLE token_refresh_config (
                         id INTEGER PRIMARY KEY DEFAULT 1,
                         enabled BOOLEAN DEFAULT 1,
-                        refresh_interval_minutes INTEGER DEFAULT 120,
+                        refresh_interval_minutes INTEGER DEFAULT 30,
                         updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                     )
                 """)
@@ -545,7 +554,7 @@ class Database:
                     ("login_password", "TEXT DEFAULT ''"),  # 预留
                     ("proxy_url", "TEXT DEFAULT ''"),  # 协议刷新代理
                     ("auto_refresh_enabled", "BOOLEAN DEFAULT 1"),
-                    ("refresh_interval_minutes", "INTEGER DEFAULT 120"),
+                    ("refresh_interval_minutes", "INTEGER DEFAULT 30"),
                     ("last_st_refresh_at", "TIMESTAMP"),
                     ("last_st_refresh_result", "TEXT DEFAULT ''"),
                     ("ban_reason", "TEXT"),  # 禁用原因
@@ -701,7 +710,7 @@ class Database:
             if await self._table_exists(db, "token_refresh_config"):
                 token_refresh_columns_to_add = [
                     ("enabled", "BOOLEAN DEFAULT 1"),
-                    ("refresh_interval_minutes", "INTEGER DEFAULT 120"),
+                    ("refresh_interval_minutes", "INTEGER DEFAULT 30"),
                     ("updated_at", "TIMESTAMP DEFAULT CURRENT_TIMESTAMP"),
                 ]
 
@@ -786,7 +795,7 @@ class Database:
                     login_password TEXT DEFAULT '',
                     proxy_url TEXT DEFAULT '',
                     auto_refresh_enabled BOOLEAN DEFAULT 1,
-                    refresh_interval_minutes INTEGER DEFAULT 120,
+                    refresh_interval_minutes INTEGER DEFAULT 30,
                     last_st_refresh_at TIMESTAMP,
                     last_st_refresh_result TEXT DEFAULT '',
                     ban_reason TEXT,
@@ -989,7 +998,7 @@ class Database:
                 CREATE TABLE IF NOT EXISTS token_refresh_config (
                     id INTEGER PRIMARY KEY DEFAULT 1,
                     enabled BOOLEAN DEFAULT 1,
-                    refresh_interval_minutes INTEGER DEFAULT 120,
+                    refresh_interval_minutes INTEGER DEFAULT 30,
                     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 )
             """)
@@ -1371,6 +1380,7 @@ class Database:
         allowed = {
             "google_cookies", "st", "at", "at_expires", "credits",
             "user_paygate_tier", "last_st_refresh_at", "last_st_refresh_result",
+            "email", "login_account", "name",
         }
         if not kwargs or not set(kwargs).issubset(allowed):
             raise ValueError("Invalid cookie refresh fields")
@@ -1382,6 +1392,46 @@ class Database:
             )
             await db.commit()
             return cursor.rowcount > 0
+
+    async def pause_token_for_auth(self, token: Token, paused_at: datetime) -> bool:
+        async with self._connect(write=True) as db:
+            cursor = await db.execute(
+                """UPDATE tokens SET is_active = 0, ban_reason = 'auth', banned_at = ?
+                WHERE id = ? AND is_active = 1 AND st = ? AND at IS ?
+                AND COALESCE(google_cookies, '') = ?""",
+                [paused_at, token.id, token.st, token.at, token.google_cookies or ""],
+            )
+            await db.commit()
+            return cursor.rowcount > 0
+
+    async def recover_auth_paused_token(
+        self, token: Token, credits: int, user_paygate_tier: Optional[str]
+    ) -> bool:
+        async with self._connect(write=True) as db:
+            cursor = await db.execute(
+                """UPDATE tokens SET is_active = 1, ban_reason = NULL, banned_at = NULL,
+                credits = ?, user_paygate_tier = ?
+                WHERE id = ? AND is_active = 0 AND ban_reason = 'auth'
+                AND banned_at = ? AND st = ? AND at IS ?
+                AND COALESCE(google_cookies, '') = ?""",
+                [
+                    credits,
+                    user_paygate_tier,
+                    token.id,
+                    token.banned_at,
+                    token.st,
+                    token.at,
+                    token.google_cookies or "",
+                ],
+            )
+            restored = cursor.rowcount > 0
+            if restored:
+                await db.execute(
+                    "UPDATE token_stats SET consecutive_error_count = 0 WHERE token_id = ?",
+                    [token.id],
+                )
+            await db.commit()
+            return restored
 
     async def delete_token(self, token_id: int):
         """Delete token and related data"""
@@ -2720,6 +2770,19 @@ class Database:
                 return TokenRefreshConfig(**dict(row))
             return TokenRefreshConfig()
 
+    async def update_all_tokens_refresh_interval(self, minutes: int) -> int:
+        """Apply one Cookie refresh interval to every account."""
+        try:
+            normalized = max(1, int(minutes))
+        except Exception:
+            raise ValueError("refresh_interval_minutes must be a positive integer")
+        async with self._connect(write=True) as db:
+            cursor = await db.execute(
+                "UPDATE tokens SET refresh_interval_minutes = ?", (normalized,)
+            )
+            await db.commit()
+            return cursor.rowcount
+
     async def update_token_refresh_config(
         self,
         enabled: Optional[bool] = None,
@@ -2738,10 +2801,10 @@ class Database:
                 new_interval = int(
                     refresh_interval_minutes
                     if refresh_interval_minutes is not None
-                    else current.get("refresh_interval_minutes", 120)
+                    else current.get("refresh_interval_minutes", 30)
                 )
             except Exception:
-                new_interval = 120
+                new_interval = 30
             new_interval = max(1, new_interval)
 
             if row:

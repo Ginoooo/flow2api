@@ -7,6 +7,7 @@ from PIL import Image
 
 from src.api.routes import _get_openai_model_catalog, _normalize_openai_request
 from src.core.models import ChatCompletionRequest, ChatMessage
+from src.core.config import config
 from src.core.model_resolver import resolve_model_name
 from src.services.flow_client import FlowClient
 from src.services.generation_handler import MODEL_CONFIG, GenerationHandler
@@ -49,6 +50,38 @@ class VeoLiteModelResolverTests(unittest.TestCase):
             MODEL_CONFIG["veo-3.1-fast-r2v-8s-portrait"]["model_key"],
             "veo_3_1_r2v_fast_portrait",
         )
+
+    def test_omni_1_2_flash_registered_with_live_upstream_keys(self):
+        # 2026-11-08 实测：Omni 1.2 Flash 上游 family key 为 macaron_cookie，
+        # 纯文本 YhhmEf 用 macaron_cookie_t2v_8s，参考图 MZZa6b 用 macaron_cookie_r2v_*。
+        listed = {item["id"] for item in _get_openai_model_catalog()}
+
+        self.assertIn("omni-1.2-flash", listed)
+        for seconds in (3, 4, 5, 6, 7, 8, 9, 10):
+            self.assertIn(f"omni-1.2-flash-{seconds}s-landscape", listed)
+            self.assertIn(f"omni-1.2-flash-{seconds}s-portrait", listed)
+        for seconds in (11, 12, 13, 14, 15):
+            self.assertIn(f"omni-1.2-flash-{seconds}s-portrait", listed)
+            self.assertNotIn(f"omni-1.2-flash-{seconds}s-landscape", listed)
+
+        landscape_8s = MODEL_CONFIG["omni-1.2-flash-8s-landscape"]
+        self.assertEqual(landscape_8s["model_key"], "macaron_cookie_t2v_8s")
+        self.assertEqual(landscape_8s["reference_model_key"], "macaron_cookie_r2v_8s")
+        self.assertEqual(landscape_8s["reference_duration"], 8)
+        self.assertEqual(landscape_8s["aspect_ratio"], "VIDEO_ASPECT_RATIO_LANDSCAPE")
+
+        portrait_15s = MODEL_CONFIG["omni-1.2-flash-15s-portrait"]
+        self.assertEqual(portrait_15s["model_key"], "macaron_cookie_t2v_15s")
+        self.assertEqual(portrait_15s["aspect_ratio"], "VIDEO_ASPECT_RATIO_PORTRAIT")
+
+        alias = MODEL_CONFIG["omni-1.2-flash"]
+        self.assertEqual(alias["model_key"], "macaron_cookie_t2v_8s")
+        self.assertEqual(alias["aspect_ratio"], "VIDEO_ASPECT_RATIO_LANDSCAPE")
+
+        legacy = MODEL_CONFIG["omni"]
+        self.assertEqual(legacy["model_key"], "macaron_cookie_t2v_8s")
+        legacy_portrait = MODEL_CONFIG["omni_portrait"]
+        self.assertEqual(legacy_portrait["aspect_ratio"], "VIDEO_ASPECT_RATIO_PORTRAIT")
 
     def test_resolve_t2v_lite_alias_to_portrait_variant(self):
         request = types.SimpleNamespace(
@@ -287,6 +320,147 @@ class VeoLiteFlowClientTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(request_data[1], "veo_3_1_t2v_lite")
         self.assertEqual(request_data[2], 2)
         self.assertTrue(rpc["argument"][2][0])
+
+    async def test_short_fast_relaxed_key_falls_back_to_same_duration_standard_key(self):
+        operation_id = "11111111-1111-1111-1111-111111111111"
+        project_id = "22222222-2222-2222-2222-222222222222"
+        media_id = "33333333-3333-3333-3333-333333333333"
+        self.client._call_flow_frontend_rpc = AsyncMock(
+            side_effect=[
+                RuntimeError("Flow frontend RPC rejected: rpc=YhhmEf, code=[5]"),
+                [[operation_id, project_id, media_id]],
+            ]
+        )
+
+        await self.client.generate_video_text(
+            at="at-token",
+            project_id=project_id,
+            prompt="猫猫",
+            model_key="veo_3_1_t2v_fast_6s_relaxed",
+            aspect_ratio="VIDEO_ASPECT_RATIO_LANDSCAPE",
+            use_v2_model_config=True,
+            google_cookies="SID=session-cookie",
+        )
+
+        calls = self.client._call_flow_frontend_rpc.await_args_list
+        self.assertEqual(len(calls), 2)
+        self.assertEqual(calls[0].kwargs["argument"][0][0][1], "veo_3_1_t2v_fast_6s_relaxed")
+        self.assertEqual(calls[1].kwargs["argument"][0][0][1], "veo_3_1_t2v_fast_6s")
+
+    async def test_model_fallback_runs_even_when_general_retry_budget_is_one(self):
+        operation_id = "11111111-1111-1111-1111-111111111111"
+        project_id = "22222222-2222-2222-2222-222222222222"
+        media_id = "33333333-3333-3333-3333-333333333333"
+        self.client._call_flow_frontend_rpc = AsyncMock(
+            side_effect=[
+                RuntimeError("Flow frontend RPC rejected: rpc=YhhmEf, code=[5]"),
+                [[operation_id, project_id, media_id]],
+            ]
+        )
+        previous_retries = config._config.setdefault("flow", {}).get("max_retries")
+        config._config["flow"]["max_retries"] = 1
+        try:
+            await self.client.generate_video_text(
+                at="at-token",
+                project_id=project_id,
+                prompt="猫猫",
+                model_key="veo_3_1_t2v_fast_6s_relaxed",
+                aspect_ratio="VIDEO_ASPECT_RATIO_LANDSCAPE",
+                use_v2_model_config=True,
+                google_cookies="SID=session-cookie",
+            )
+        finally:
+            if previous_retries is None:
+                config._config["flow"].pop("max_retries", None)
+            else:
+                config._config["flow"]["max_retries"] = previous_retries
+        self.assertEqual(self.client._call_flow_frontend_rpc.await_count, 2)
+
+    async def test_access_denied_does_not_fallback_to_standard_key(self):
+        self.client._call_flow_frontend_rpc = AsyncMock(
+            side_effect=RuntimeError("PUBLIC_ERROR_MODEL_ACCESS_DENIED")
+        )
+
+        with self.assertRaisesRegex(RuntimeError, "ACCESS_DENIED"):
+            await self.client.generate_video_text(
+                at="at-token",
+                project_id="22222222-2222-2222-2222-222222222222",
+                prompt="猫猫",
+                model_key="veo_3_1_t2v_fast_6s_relaxed",
+                aspect_ratio="VIDEO_ASPECT_RATIO_LANDSCAPE",
+                use_v2_model_config=True,
+                google_cookies="SID=session-cookie",
+            )
+        self.client._call_flow_frontend_rpc.assert_awaited_once()
+
+    async def test_quota_reached_is_not_retried_on_same_account(self):
+        self.client._call_flow_frontend_rpc = AsyncMock(
+            side_effect=RuntimeError(
+                "Flow frontend RPC rejected: rpc=eb1hJf, error=PUBLIC_ERROR_USER_QUOTA_REACHED"
+            )
+        )
+        self.client._notify_browser_captcha_error = AsyncMock()
+
+        with patch("src.services.flow_client.asyncio.sleep", new=AsyncMock()):
+            with self.assertRaisesRegex(RuntimeError, "QUOTA_REACHED"):
+                await self.client.generate_video_start_image(
+                    at="at-token",
+                    project_id="22222222-2222-2222-2222-222222222222",
+                    prompt="猫猫",
+                    model_key="veo_3_1_i2v_s_fast",
+                    aspect_ratio="VIDEO_ASPECT_RATIO_LANDSCAPE",
+                    start_media_id="33333333-3333-3333-3333-333333333333",
+                    google_cookies="SID=session-cookie",
+                )
+
+        self.client._call_flow_frontend_rpc.assert_awaited_once()
+
+    async def test_unusual_activity_retries_once_then_raises_and_reports(self):
+        unusual = RuntimeError(
+            "Flow frontend RPC rejected: rpc=eb1hJf, error=PUBLIC_ERROR_UNUSUAL_ACTIVITY"
+        )
+        self.client._call_flow_frontend_rpc = AsyncMock(side_effect=unusual)
+        self.client._notify_browser_captcha_error = AsyncMock()
+
+        with patch("src.services.flow_client.asyncio.sleep", new=AsyncMock()):
+            with self.assertRaisesRegex(RuntimeError, "UNUSUAL_ACTIVITY"):
+                await self.client.generate_video_start_image(
+                    at="at-token",
+                    project_id="22222222-2222-2222-2222-222222222222",
+                    prompt="猫猫",
+                    model_key="veo_3_1_i2v_s_fast",
+                    aspect_ratio="VIDEO_ASPECT_RATIO_LANDSCAPE",
+                    start_media_id="33333333-3333-3333-3333-333333333333",
+                    google_cookies="SID=session-cookie",
+                )
+
+        # 同账号只重试一次，剩下交给上层换号
+        self.assertEqual(self.client._call_flow_frontend_rpc.await_count, 2)
+        # 每次被拒都通知打码服务自愈
+        self.assertEqual(self.client._notify_browser_captcha_error.await_count, 2)
+
+    async def test_transient_retry_keeps_original_model_key(self):
+        operation_id = "11111111-1111-1111-1111-111111111111"
+        project_id = "22222222-2222-2222-2222-222222222222"
+        media_id = "33333333-3333-3333-3333-333333333333"
+        self.client._call_flow_frontend_rpc = AsyncMock(
+            side_effect=[
+                RuntimeError("connection timed out"),
+                [[operation_id, project_id, media_id]],
+            ]
+        )
+        await self.client.generate_video_text(
+            at="at-token",
+            project_id=project_id,
+            prompt="猫猫",
+            model_key="veo_3_1_t2v_fast_6s_relaxed",
+            aspect_ratio="VIDEO_ASPECT_RATIO_LANDSCAPE",
+            use_v2_model_config=True,
+            google_cookies="SID=session-cookie",
+        )
+        calls = self.client._call_flow_frontend_rpc.await_args_list
+        self.assertEqual(calls[0].kwargs["argument"][0][0][1], "veo_3_1_t2v_fast_6s_relaxed")
+        self.assertEqual(calls[1].kwargs["argument"][0][0][1], "veo_3_1_t2v_fast_6s_relaxed")
 
     def test_reference_video_uses_current_prompt_and_media_envelopes(self):
         rpc_id, argument = self.client._build_frontend_video_generation_argument(

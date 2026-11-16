@@ -1,0 +1,26 @@
+{
+  "zh-CN": {
+    "登录 - Flow2API": "登录 - Flow2API",
+    "管理员控制台": "管理员控制台",
+    "账户": "账户",
+    "请输入账户": "请输入账户",
+    "密码": "密码",
+    "请输入密码": "请输入密码",
+    "登录": "登录",
+    "登录中...": "登录中...",
+    "登录失败": "登录失败",
+    "网络错误,请稍后重试": "网络错误,请稍后重试"
+  },
+  "en": {
+    "登录 - Flow2API": "Sign in - Flow2API",
+    "管理员控制台": "Admin Console",
+    "账户": "Username",
+    "请输入账户": "Enter your username",
+    "密码": "Password",
+    "请输入密码": "Enter your password",
+    "登录": "Sign in",
+    "登录中...": "Signing in...",
+    "登录失败": "Sign-in failed",
+    "网络错误,请稍后重试": "Network error. Please try again later."
+  }
+}

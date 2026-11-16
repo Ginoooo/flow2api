@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Flow2API Captcha Worker Settings</title>
+  <title data-i18n="Flow2API Captcha Worker Settings">Flow2API Captcha Worker Settings</title>
   <style>
     body {
       margin: 0;
@@ -70,29 +70,46 @@
       border-radius: 6px;
       padding: 1px 6px;
     }
+    .language {
+      display: flex;
+      justify-content: flex-end;
+      margin-bottom: 16px;
+    }
+    select {
+      padding: 6px 10px;
+      border: 1px solid #d1d5db;
+      border-radius: 8px;
+      background: #fff;
+    }
   </style>
 </head>
 <body>
   <div class="wrap">
     <div class="panel">
+      <div class="language">
+        <select id="language" aria-label="界面语言" data-i18n-aria-label="界面语言">
+          <option value="zh-CN">中文</option>
+          <option value="en">English</option>
+        </select>
+      </div>
       <h1>Flow2API Captcha Worker</h1>
-      <p>给当前浏览器实例设置一个独立的路由键，Flow2API 后端就能把对应账号的验证码请求固定发到这个实例。</p>
+      <p data-i18n="给当前浏览器实例设置一个独立的路由键，Flow2API 后端就能把对应账号的验证码请求固定发到这个实例。">给当前浏览器实例设置一个独立的路由键，Flow2API 后端就能把对应账号的验证码请求固定发到这个实例。</p>
 
-      <label for="routeKey">Route Key</label>
-      <input id="routeKey" type="text" placeholder="例如 9223">
+      <label for="routeKey" data-i18n="Route Key">Route Key</label>
+      <input id="routeKey" type="text" placeholder="例如 9223" data-i18n-placeholder="例如 9223">
 
-      <label for="clientLabel">Client Label</label>
-      <input id="clientLabel" type="text" placeholder="例如 browser-9223">
+      <label for="clientLabel" data-i18n="Client Label">Client Label</label>
+      <input id="clientLabel" type="text" placeholder="例如 browser-9223" data-i18n-placeholder="例如 browser-9223">
 
-      <label for="serverUrl">WebSocket URL</label>
+      <label for="serverUrl" data-i18n="WebSocket URL">WebSocket URL</label>
       <input id="serverUrl" type="text" placeholder="ws://127.0.0.1:8000/captcha_ws">
 
       <label for="apiKey">Flow2API API Key</label>
-      <input id="apiKey" type="password" placeholder="管理后台里的 API Key">
+      <input id="apiKey" type="password" placeholder="管理后台里的 API Key" data-i18n-placeholder="管理后台里的 API Key">
 
-      <button id="saveBtn" type="button">保存</button>
+      <button id="saveBtn" type="button" data-i18n="保存">保存</button>
       <div class="status" id="status"></div>
-      <div class="hint">管理台 token 里填写同样的 <code>Route Key</code>，比如 9223 对 9223。后端会使用 API Key 校验 WebSocket 连接。</div>
+      <div class="hint"><span data-i18n="管理台 token 里填写同样的">管理台 token 里填写同样的</span> <code>Route Key</code><span data-i18n="，比如 9223 对 9223。后端会使用 API Key 校验 WebSocket 连接。">，比如 9223 对 9223。后端会使用 API Key 校验 WebSocket 连接。</span></div>
     </div>
   </div>
   <script src="options.js"></script>

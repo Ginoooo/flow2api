@@ -15,6 +15,26 @@ from typing import Any, Awaitable, Callable, Dict, List, Optional
 from ..core.logger import debug_logger
 from .browser_cookie_utils import validate_flow_cookie_storage
 
+# 视频提交被 PUBLIC_ERROR_UNUSUAL_ACTIVITY 拒绝时，同账号最多再重试的次数；
+# 之后交给上层切换账号（同账号同 IP 立刻重试大概率仍被风控）。
+UNUSUAL_ACTIVITY_SAME_TOKEN_RETRIES = 1
+
+def _safe_updated_flow_cookies(owner, original) -> str:
+    """读取 Cookie 最新快照，缺失实现时安全降级。
+
+    旧版/自定义 flow_frontend 覆盖可能没有 get_updated_flow_cookies，
+    直接调用会抛 AttributeError（历史报错：
+    'FlowClient' object has no attribute 'get_updated_flow_cookies'）。
+    """
+    getter = getattr(owner, "get_updated_flow_cookies", None)
+    if getter is None:
+        return str(original or "").strip()
+    try:
+        return getter(original)
+    except Exception:
+        return str(original or "").strip()
+
+
 class CurrentFlowClientMixin:
     FRONTEND_ACCESS_TOKEN = "flow-frontend-cookie"
     CURRENT_IMAGE_MODELS = frozenset({"BELUGA", "HARBOR_SEAL", "GEM_PIX_2"})
@@ -126,6 +146,9 @@ class CurrentFlowClientMixin:
     ) -> dict:
         if str(google_cookies or "").strip():
             validate_flow_cookie_storage(google_cookies)
+        google_cookies = await self._resolve_flow_frontend_cookie_storage(
+            google_cookies=google_cookies, token_id=token_id
+        )
         credits = await self.get_credits(
             self.FRONTEND_ACCESS_TOKEN,
             google_cookies=google_cookies,
@@ -138,6 +161,7 @@ class CurrentFlowClientMixin:
             "user": {},
             "credits": credits.get("credits", 0),
             "userPaygateTier": credits.get("userPaygateTier"),
+            "google_cookies": _safe_updated_flow_cookies(self, google_cookies),
         }
 
     async def create_project(
@@ -520,9 +544,19 @@ class CurrentFlowClientMixin:
     ) -> dict:
         await self._frontend_cookie(google_cookies, token_id)
         max_retries = max(1, int(self._get_runtime_config().flow_max_retries or 1))
+        model_keys = [str(model_key or "").strip()]
+        # Flow currently exposes both relaxed and standard short-duration keys.
+        # Some Pro accounts return code=[5] for the relaxed key; retry the exact
+        # same duration/mode without the suffix before repeating the same request.
+        if "_relaxed" in model_keys[0]:
+            model_keys.append(model_keys[0].replace("_relaxed", ""))
+        attempt_budget = max(max_retries, len(model_keys))
+        fallback_model_key: Optional[str] = None
+        unusual_activity_hits = 0
         last_error: Optional[Exception] = None
-        for retry_attempt in range(max_retries):
+        for retry_attempt in range(attempt_budget):
             browser_id = None
+            request_model_key = fallback_model_key or model_keys[0]
             try:
                 token, browser_id = await self._get_recaptcha_token(
                     project_id,
@@ -535,7 +569,7 @@ class CurrentFlowClientMixin:
                 rpc_id, argument = self._build_frontend_video_generation_argument(
                     project_id=project_id,
                     prompt=prompt,
-                    model_key=model_key,
+                    model_key=request_model_key,
                     aspect_ratio=aspect_ratio,
                     recaptcha_token=token,
                     # Protocol requests use an independent session id instead of
@@ -560,7 +594,7 @@ class CurrentFlowClientMixin:
                     payload,
                     project_id=project_id,
                     aspect_ratio=aspect_ratio,
-                    model_key=model_key,
+                    model_key=request_model_key,
                     rpc_id=rpc_id,
                 )
             except Exception as error:
@@ -568,7 +602,50 @@ class CurrentFlowClientMixin:
                 # MODEL_ACCESS_DENIED 为账号权限拒绝，重试不会改变结果
                 if "MODEL_ACCESS_DENIED" in str(error):
                     raise
-                if retry_attempt >= max_retries - 1:
+                error_text = str(error).lower()
+                is_missing_model = bool(
+                    re.search(r"code\s*=\s*\[?5\]?", error_text)
+                    or "not_found" in error_text
+                    or "not found" in error_text
+                )
+                if is_missing_model and request_model_key != model_keys[-1]:
+                    fallback_model_key = model_keys[-1]
+                    debug_logger.log_warning(
+                        "[VIDEO] Flow 未找到 relaxed 模型 key，回退同一时长标准 key: "
+                        f"{request_model_key} -> {model_keys[-1]}"
+                    )
+                    continue
+                retry_handler = getattr(
+                    self, "_handle_retryable_generation_error", None
+                )
+                if retry_handler is None:
+                    if retry_attempt >= max_retries - 1:
+                        raise
+                    continue
+                if "public_error_unusual_activity" in error_text:
+                    unusual_activity_hits += 1
+                if (
+                    retry_attempt >= max_retries - 1
+                    or unusual_activity_hits > UNUSUAL_ACTIVITY_SAME_TOKEN_RETRIES
+                ):
+                    # 不再同号重试，但仍需通知打码服务自愈（清缓存/重建浏览器）
+                    await self._notify_browser_captcha_error(
+                        browser_id=getattr(error, "browser_ref", None) or browser_id,
+                        project_id=project_id,
+                        error_reason=self._get_retry_reason(str(error))
+                        or str(error)[:120],
+                        error_message=str(error),
+                    )
+                    raise
+                should_retry = await retry_handler(
+                    error,
+                    retry_attempt,
+                    max_retries,
+                    browser_id,
+                    project_id,
+                    "[VIDEO] ",
+                )
+                if not should_retry:
                     raise
             finally:
                 await self._notify_browser_captcha_request_finished(browser_id)
@@ -715,8 +792,8 @@ class CurrentFlowClientMixin:
         prompt: str,
         aspect_ratio: str,
         reference_media_ids: List[str],
-        model_usage_key: str = "abra_r2v_10s",
-        model_display_name: str = "Omni Flash",
+        model_usage_key: str = "macaron_cookie_r2v_10s",
+        model_display_name: str = "Omni 1.2 Flash",
         duration: int = 10,
         user_paygate_tier: str = "PAYGATE_TIER_ONE",
         token_id: Optional[int] = None,
